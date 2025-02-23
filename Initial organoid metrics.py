@@ -1,15 +1,12 @@
-# Environment
-# Make sure that the correct interpreter is selected
-# If putting in new packages: launch terminal, conda activate ella_organoid
-
 # Import packages --------------------------------------------------
-import os # for interacting with the operating system
+import os # for file and directory operations
 import scipy.io # for loading .mat files (MATLAB data)
 import matplotlib.pyplot as plt # for plotting - the "as plt part allows us to refer to the package as plt"
 import numpy as np # for numerical operations (e.g. matrix manipulation)
 import seaborn as sns # for heatmaps and enhanced data visualisation
 import bct # for graph-theoretic analysis (from the brain connectivity toolbox)
 from glob import glob # for finding files that match a certain pattern
+from scipy.spatial.distance import cdist # for computing pairwise Euclidean distances
 
 
 # Set up files --------------------------------------------------
@@ -26,7 +23,65 @@ matrix_files = [file for file in glob("kr01/organoid/OrgNets/*.mat") if ("C" in 
 
 # Load the first file to check the keys
 sample_data = scipy.io.loadmat(matrix_files[0])
-print(sample_data.keys())
+print("Keys in the MATLAB file:", sample_data.keys())
+
+# Check shapes of relevant matrices
+for key in ['adjM', 'adjM_trimmed', 'dij', 'coords']:
+    if key in sample_data:
+        print(f"{key} shape: {np.shape(sample_data[key])}")
+
+
+# Exploring coordinates --------------------------------------------------
+# Extract the coordinates
+coords_raw = sample_data['coords']
+coords_raw = coords_raw[0, 0]  
+
+# Extract x and y values
+x_values = np.array(coords_raw['x']).astype(float).flatten()
+y_values = np.array(coords_raw['y']).astype(float).flatten()
+
+# Plot the electrode/node positions
+plt.figure(figsize=(8, 6))
+plt.scatter(x_values, y_values, c='blue', alpha=0.7)
+plt.xlabel("X Coordinate")
+plt.ylabel("Y Coordinate")
+plt.title("Electrode/Node Positions")
+plt.grid(True)
+plt.savefig("er05/Organoid project scripts/Output/Chimpanzee/Electrode positions.png")
+
+
+# Sorting out matrix size mismatch --------------------------------------------------
+# Extract relevant coordinates-----
+coords = sample_data['coords']['channel'][0][0]  # Extract coordinates
+active_channel_idx = sample_data['active_channel_idx']  # Extract active channel indices
+active_coords = coords[active_channel_idx.flatten()]
+
+# Recompute the distance matrix-----
+# Compute pairwise distances between active nodes
+filtered_dij = cdist(active_coords[:, 1:], active_coords[:, 1:])  # Exclude channel column
+
+# Filter adjM-----
+adjM = sample_data['adjM']
+# Extract vectors from the loaded .mat file
+data_channel = sample_data['data']['channel'][0][0].flatten()  # Flatten to get a 1D array
+coords_channel = sample_data['coords']['channel'][0][0].flatten()
+
+# Get unique values
+unique_data_channel = np.unique(data_channel)
+
+# Perform set difference
+difference = np.setdiff1d(unique_data_channel, coords_channel)
+
+# Find indices in unique_data_channel that are in the set difference
+indices = np.where(np.isin(unique_data_channel, difference))[0]
+
+# Remove the indices from adjM on both dimensions
+adjM = sample_data['adjM']
+adjM = np.delete(adjM, indices, axis=0)
+adjM = np.delete(adjM, indices, axis=1)
+
+# Check shapes
+print(adjM.shape, filtered_dij.shape)
 
 
 # Loop through each adjacency matrix file --------------------------------------------------
@@ -90,13 +145,15 @@ for file_path in matrix_files:
     degree = np.sum(adjM_thresholded != 0, axis=0)  # Count nonzero edges per node
 
     # Total edge length
-    total_edge_length = np.sum(adjM_thresholded * dij, axis=0) # Sum of edge weights per node
+    total_edge_length = np.sum(adjM_thresholded * dij, axis=0) # Sum of edge weights per node#############################################################################
+    # What I need to do is find a dij that is the same size as adjM
 
     # Clustering coefficient
     clustering = bct.clustering_coef_bu(adjM_thresholded)
 
     # Betweenness centrality
-    betweenness = bct.betweenness_wei(1 / (adjM_thresholded + np.finfo(float).eps))  
+    betweenness = bct.betweenness_wei(1 / (adjM_thresholded + np.finfo(float).eps))
+    # smallest positive number that can be represented by a float added, which is added to adjM_thresholded to avoid division by zero
 
     # Number of connections
     num_connections = np.count_nonzero(adjM_thresholded)//2 # Divide by 2 to avoid double counting
@@ -130,7 +187,8 @@ for file_path in matrix_files:
 
     # Degree Distribution (Top-Left)
     sns.histplot(degree, bins=20, kde=True, color='black', edgecolor="black", ax=axes[0, 0])
-    axes[0, 0].set_xlabel("Degree")
+    axes[0, 0].set_xscale("log")
+    axes[0, 0].set_xlabel("Log Degree")
     axes[0, 0].set_ylabel("Frequency")
     axes[0, 0].set_title("Degree Distribution")
 
@@ -148,7 +206,8 @@ for file_path in matrix_files:
 
     # Betweenness Centrality Distribution (Bottom-Right)
     sns.histplot(betweenness, bins=20, kde=True, color='black', edgecolor="black", ax=axes[1, 1])
-    axes[1, 1].set_xlabel("Betweenness Centrality")
+    axes[1, 1].set_xscale("log")
+    axes[1, 1].set_xlabel("Log Betweenness Centrality")
     axes[1, 1].set_ylabel("Frequency")
     axes[1, 1].set_title("Betweenness Centrality Distribution")
 
@@ -174,8 +233,3 @@ clustering = data['clustering']
 betweenness = data['betweenness']
 num_connections = data['num_connections']
 density = data['density']
-
-# Save graphs as image files
-
-
-
