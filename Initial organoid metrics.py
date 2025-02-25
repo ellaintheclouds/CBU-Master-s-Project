@@ -7,15 +7,14 @@ import seaborn as sns # for heatmaps and enhanced data visualisation
 import bct # for graph-theoretic analysis (from the brain connectivity toolbox)
 from glob import glob # for finding files that match a certain pattern
 from scipy.spatial.distance import cdist # for computing pairwise Euclidean distances
-
+from scipt stats import skew # for computing skewness
 
 # Load data --------------------------------------------------
 # List all .mat files in the "matrices/" folder
 matrix_files = [file for file in glob("kr01/organoid/OrgNets/*.mat") if ("C" in os.path.basename(file) or "H" in os.path.basename(file)) and "dt10" in os.path.basename(file)]
 
-
-# Loop through each adjacency matrix file --------------------------------------------------
 for file_path in matrix_files:
+    # Sorting each file by species and day --------------------------------------------------
     # Extract matrix name (e.g., "matrix1" from "matrices/matrix1.mat")
     matrix_name = os.path.basename(file_path).replace(".mat", "")
 
@@ -48,60 +47,113 @@ for file_path in matrix_files:
     if "adjM" not in mat_data:
         print(f"Skipping {matrix_name}: 'adjM' key not found.")
         continue
+    
 
-    # Extract adjacency matrix 
+    # Sorting out matrix size mismatch --------------------------------------------------
+    # Extract relevant coordinates-----
+    #coords = mat_data['coords']['channel'][0][0]  # Extract coordinates
+    #active_channel_idx = mat_data['active_channel_idx']  # Extract active channel indices
+    #active_coords = coords[active_channel_idx.flatten()] # Extract active coordinates
+
+    # Recompute the distance matrix-----
+    # Compute pairwise distances between active nodes
+    #dij = cdist(active_coords[:, 1:], active_coords[:, 1:]) # a 2D matrix where each cell represents the distance between two nodes (brain regions)
+
+    # Filter adjM-----
+    # Load adjacency matrix
     adjM = mat_data['adjM'] # a 2D matrix where each cell represents a connection between two nodes (brain regions)
 
+    # Extract vectors from the loaded .mat file
+    #data_channel = mat_data['data']['channel'][0][0].flatten()  # Flatten to get a 1D array
+    #coords_channel = mat_data['coords']['channel'][0][0].flatten()
+
+    # Get unique values
+    #unique_data_channel = np.unique(data_channel)
+
+    # Perform set difference
+    #difference = np.setdiff1d(unique_data_channel, coords_channel)
+
+    # Find indices in unique_data_channel that are in the set difference
+    #indices = np.where(np.isin(unique_data_channel, difference))[0]
+
+    # Remove the indices from adjM on both dimensions
+    #adjM = mat_data['adjM']
+    #adjM = np.delete(adjM, indices, axis=0)
+    #adjM = np.delete(adjM, indices, axis=1)
+
+
+    # Preprocess adjM --------------------------------------------------
     # Remove NaN values but keep shape
     adjM = np.nan_to_num(adjM)
 
-    # Display matrix shape
-    print(f"Adjacency matrix shape: {adjM.shape}")
 
-    # Extract distance matrix
-    dij = mat_data['dij'] # a 2D matrix where each cell represents the distance between two nodes (brain regions)
+    # Define densities to explore
+    densities_to_test = [0.05, 0.1, 0.2]  # 5%, 10%, 20% threshold
 
+    # Store results for each density
+    for density_level in densities_to_test:
+        print(f"\nApplying threshold: {int(density_level * 100)}%")
 
-    # Preprocess the matrix --------------------------------------------------
-    # Thresholding
-    density_desired = 0.1 # 10% threshold - change if desired
-    threshold = np.percentile(adjM, (1-density_desired)*100)
-    adjM_thresholded = adjM.copy()
-    adjM_thresholded[adjM_thresholded < threshold] = 0
+        # Apply thresholding
+        adjM_thresholded = bct.threshold_proportional(adjM, density_level, binarize=False)
 
+        # Compute connectivity metrics --------------------------------------------------
+        # Degree
+        degree = np.sum(adjM_thresholded != 0, axis=0)  # Count nonzero edges per node
 
-    # Compute connectivity metrics --------------------------------------------------
-    # Degree
-    degree = np.sum(adjM_thresholded != 0, axis=0)  # Count nonzero edges per node
+        # Total edge length
+        total_edge_length = np.sum(adjM_thresholded, axis=0)
 
-    # Total edge length
-    total_edge_length = np.sum(adjM_thresholded * dij, axis=0) # Sum of edge weights per node#############################################################################
-    # What I need to do is find a dij that is the same size as adjM
+        # Clustering coefficient
+        clustering = bct.clustering_coef_bu(adjM_thresholded)
 
-    # Clustering coefficient
-    clustering = bct.clustering_coef_bu(adjM_thresholded)
+        # Betweenness centrality
+        betweenness = bct.betweenness_wei(1 / (adjM_thresholded + np.finfo(float).eps))
 
-    # Betweenness centrality
-    betweenness = bct.betweenness_wei(1 / (adjM_thresholded + np.finfo(float).eps))
-    # smallest positive number that can be represented by a float added, which is added to adjM_thresholded to avoid division by zero
+        # Number of connections
+        num_connections = np.count_nonzero(adjM_thresholded) // 2  # Avoid double counting
+        print(f"Total number of connections: {num_connections}")
 
-    # Number of connections
-    num_connections = np.count_nonzero(adjM_thresholded)//2 # Divide by 2 to avoid double counting
-    print(f"\Total number of connections: {num_connections}")
+        # Connection density
+        num_nodes = adjM_thresholded.shape[0]
+        density = num_connections / ((num_nodes * (num_nodes - 1)) / 2)  # Proportion of existing connections
+        print(f"Network density: {density:.4f}")
 
-    # Connection density
-    num_nodes = adjM_thresholded.shape[0]
-    density = num_connections / ( (num_nodes* (num_nodes - 1)) / 2) # proportion of existing connetions
-    print(f"Network density: {density:.4f}")
+        # Save calculated metrics
+        np.savez(f"{output_dir}/Metrics/{matrix_name}_density_{int(density_level * 100)}.npz",
+                degree=degree,
+                total_edge_length=total_edge_length,
+                clustering=clustering,
+                betweenness=betweenness,
+                num_connections=num_connections,
+                density=density)
 
-    # Save calculated metrics (so that I do not have to recompute; .npz works like a dictionary)
-    np.savez(f"{output_dir}/Metrics/{matrix_name}_metrics.npz", 
-         degree=degree, 
-         total_edge_length=total_edge_length, 
-         clustering=clustering, 
-         betweenness=betweenness, 
-         num_connections=num_connections, 
-         density=density)
+        # Compute mean and skewness for each metric --------------------------------------------------
+        degree_mean = np.mean(degree)
+        degree_skew = skew(degree)
+
+        total_edge_length_mean = np.mean(total_edge_length)
+        total_edge_length_skew = skew(total_edge_length)
+
+        clustering_mean = np.mean(clustering)
+        clustering_skew = skew(clustering)
+
+        betweenness_mean = np.mean(betweenness)
+        betweenness_skew = skew(betweenness)
+
+        # Print results for checking
+        print(f"Degree - Mean: {degree_mean:.4f}, Skew: {degree_skew:.4f}")
+        print(f"Total Edge Length - Mean: {total_edge_length_mean:.4f}, Skew: {total_edge_length_skew:.4f}")
+        print(f"Clustering Coefficient - Mean: {clustering_mean:.4f}, Skew: {clustering_skew:.4f}")
+        print(f"Betweenness Centrality - Mean: {betweenness_mean:.4f}, Skew: {betweenness_skew:.4f}")
+
+        # Save statistics for this density level
+        np.savez(f"{output_dir}/Metrics/{matrix_name}_density_{int(density_level * 100)}.npz",
+                degree_mean=degree_mean, degree_skew=degree_skew,
+                total_edge_length_mean=total_edge_length_mean, total_edge_length_skew=total_edge_length_skew,
+                clustering_mean=clustering_mean, clustering_skew=clustering_skew,
+                betweenness_mean=betweenness_mean, betweenness_skew=betweenness_skew,
+                **np.load(f"{output_dir}/Metrics/{matrix_name}_density_{int(density_level * 100)}.npz")))
 
 
     # Visualisations --------------------------------------------------
@@ -117,8 +169,7 @@ for file_path in matrix_files:
 
     # Degree Distribution (Top-Left)
     sns.histplot(degree, bins=20, kde=True, color='black', edgecolor="black", ax=axes[0, 0])
-    axes[0, 0].set_xscale("log")
-    axes[0, 0].set_xlabel("Log Degree")
+    axes[0, 0].set_xlabel("Degree")
     axes[0, 0].set_ylabel("Frequency")
     axes[0, 0].set_title("Degree Distribution")
 
@@ -136,8 +187,7 @@ for file_path in matrix_files:
 
     # Betweenness Centrality Distribution (Bottom-Right)
     sns.histplot(betweenness, bins=20, kde=True, color='black', edgecolor="black", ax=axes[1, 1])
-    axes[1, 1].set_xscale("log")
-    axes[1, 1].set_xlabel("Log Betweenness Centrality")
+    axes[1, 1].set_xlabel("Betweenness Centrality")
     axes[1, 1].set_ylabel("Frequency")
     axes[1, 1].set_title("Betweenness Centrality Distribution")
 
