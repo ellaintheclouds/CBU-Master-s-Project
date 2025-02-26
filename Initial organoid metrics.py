@@ -1,4 +1,4 @@
-# Import packages --------------------------------------------------
+# Import packages -------------------------------------------------- 
 import os # for file and directory operations
 import scipy.io # for loading .mat files (MATLAB data)
 import matplotlib.pyplot as plt # for plotting - the "as plt part allows us to refer to the package as plt"
@@ -7,7 +7,7 @@ import seaborn as sns # for heatmaps and enhanced data visualisation
 import bct # for graph-theoretic analysis (from the brain connectivity toolbox)
 from glob import glob # for finding files that match a certain pattern
 from scipy.spatial.distance import cdist # for computing pairwise Euclidean distances
-from scipt stats import skew # for computing skewness
+from scipy.stats import skew # for computing skewness
 
 # Load data --------------------------------------------------
 # List all .mat files in the "matrices/" folder
@@ -36,57 +36,6 @@ for file_path in matrix_files:
             day_number = f"Day {i}"
             break
 
-    # Create output directories for the species and day
-    output_dir = f"er05/Organoid project scripts/Output/{species}/{day_number}"
-    os.makedirs(f"{output_dir}/Metrics", exist_ok=True)
-    os.makedirs(f"{output_dir}/Graphs", exist_ok=True)
-
-
-    # Load organoid data --------------------------------------------------
-    mat_data = scipy.io.loadmat(file_path)
-    if "adjM" not in mat_data:
-        print(f"Skipping {matrix_name}: 'adjM' key not found.")
-        continue
-    
-
-    # Sorting out matrix size mismatch --------------------------------------------------
-    # Extract relevant coordinates-----
-    #coords = mat_data['coords']['channel'][0][0]  # Extract coordinates
-    #active_channel_idx = mat_data['active_channel_idx']  # Extract active channel indices
-    #active_coords = coords[active_channel_idx.flatten()] # Extract active coordinates
-
-    # Recompute the distance matrix-----
-    # Compute pairwise distances between active nodes
-    #dij = cdist(active_coords[:, 1:], active_coords[:, 1:]) # a 2D matrix where each cell represents the distance between two nodes (brain regions)
-
-    # Filter adjM-----
-    # Load adjacency matrix
-    adjM = mat_data['adjM'] # a 2D matrix where each cell represents a connection between two nodes (brain regions)
-
-    # Extract vectors from the loaded .mat file
-    #data_channel = mat_data['data']['channel'][0][0].flatten()  # Flatten to get a 1D array
-    #coords_channel = mat_data['coords']['channel'][0][0].flatten()
-
-    # Get unique values
-    #unique_data_channel = np.unique(data_channel)
-
-    # Perform set difference
-    #difference = np.setdiff1d(unique_data_channel, coords_channel)
-
-    # Find indices in unique_data_channel that are in the set difference
-    #indices = np.where(np.isin(unique_data_channel, difference))[0]
-
-    # Remove the indices from adjM on both dimensions
-    #adjM = mat_data['adjM']
-    #adjM = np.delete(adjM, indices, axis=0)
-    #adjM = np.delete(adjM, indices, axis=1)
-
-
-    # Preprocess adjM --------------------------------------------------
-    # Remove NaN values but keep shape
-    adjM = np.nan_to_num(adjM)
-
-
     # Define densities to explore
     densities_to_test = [0.05, 0.1, 0.2]  # 5%, 10%, 20% threshold
 
@@ -94,13 +43,31 @@ for file_path in matrix_files:
     for density_level in densities_to_test:
         print(f"\nApplying threshold: {int(density_level * 100)}%")
 
+        # Create output directories for species, density, and day
+        output_dir = f"er05/Organoid project scripts/Output/{species}/{int(density_level * 100)}%/{day_number}"
+        os.makedirs(f"{output_dir}/Metrics", exist_ok=True)
+        os.makedirs(f"{output_dir}/Graphs", exist_ok=True)
+
+        # Load organoid data --------------------------------------------------
+        mat_data = scipy.io.loadmat(file_path)
+        if "adjM" not in mat_data:
+            print(f"Skipping {matrix_name}: 'adjM' key not found.")
+            continue
+        
+        # Load adjacency matrix
+        adjM = mat_data['adjM']
+
+        # Preprocess adjM --------------------------------------------------
+        # Remove NaN values but keep shape
+        adjM = np.nan_to_num(adjM)
+
         # Apply thresholding
-        adjM_thresholded = bct.threshold_proportional(adjM, density_level, binarize=False)
+        adjM_thresholded = bct.threshold_proportional(adjM, density_level)
 
         # Compute connectivity metrics --------------------------------------------------
         # Degree
-        degree = np.sum(adjM_thresholded != 0, axis=0)  # Count nonzero edges per node
-
+        degree = np.sum(adjM_thresholded != 0, axis=0)
+        
         # Total edge length
         total_edge_length = np.sum(adjM_thresholded, axis=0)
 
@@ -111,12 +78,12 @@ for file_path in matrix_files:
         betweenness = bct.betweenness_wei(1 / (adjM_thresholded + np.finfo(float).eps))
 
         # Number of connections
-        num_connections = np.count_nonzero(adjM_thresholded) // 2  # Avoid double counting
+        num_connections = np.count_nonzero(adjM_thresholded) // 2
         print(f"Total number of connections: {num_connections}")
 
         # Connection density
         num_nodes = adjM_thresholded.shape[0]
-        density = num_connections / ((num_nodes * (num_nodes - 1)) / 2)  # Proportion of existing connections
+        density = num_connections / ((num_nodes * (num_nodes - 1)) / 2)
         print(f"Network density: {density:.4f}")
 
         # Save calculated metrics
@@ -153,63 +120,38 @@ for file_path in matrix_files:
                 total_edge_length_mean=total_edge_length_mean, total_edge_length_skew=total_edge_length_skew,
                 clustering_mean=clustering_mean, clustering_skew=clustering_skew,
                 betweenness_mean=betweenness_mean, betweenness_skew=betweenness_skew,
-                **np.load(f"{output_dir}/Metrics/{matrix_name}_density_{int(density_level * 100)}.npz")))
+                **np.load(f"{output_dir}/Metrics/{matrix_name}_density_{int(density_level * 100)}.npz"))
 
+        # Visualisations --------------------------------------------------
+        # Visualise adjacency matrix
+        plt.figure(figsize=(6,6))
+        sns.heatmap(adjM_thresholded, cmap="RdBu_r", center=0, cbar=True)
+        plt.title("Thresholded Adjacency Matrix")
+        plt.savefig(f"{output_dir}/Graphs/{matrix_name} Adjacency matrix heatmap.png", dpi=300, bbox_inches="tight")
+        plt.close()
 
-    # Visualisations --------------------------------------------------
-    # Visualise adjacency matrix
-    plt.figure(figsize=(6,6))
-    sns.heatmap(adjM_thresholded, cmap="RdBu_r", center=0, cbar=True)
-    plt.title("Thresholded Adjacency Matrix")
-    plt.savefig(f"{output_dir}/Graphs/{matrix_name} Adjacency matrix heatmap.png", dpi=300, bbox_inches="tight")
-    plt.close()
+        # Create a 2x2 panel figure
+        fig, axes = plt.subplots(2, 2, figsize=(10, 8))
 
-    # Create a 2x2 panel figure
-    fig, axes = plt.subplots(2, 2, figsize=(10, 8))  # 2 rows, 2 columns
+        # Degree Distribution
+        sns.histplot(degree, bins=20, kde=True, color='black', edgecolor="black", ax=axes[0, 0])
+        axes[0, 0].set_title("Degree Distribution")
 
-    # Degree Distribution (Top-Left)
-    sns.histplot(degree, bins=20, kde=True, color='black', edgecolor="black", ax=axes[0, 0])
-    axes[0, 0].set_xlabel("Degree")
-    axes[0, 0].set_ylabel("Frequency")
-    axes[0, 0].set_title("Degree Distribution")
+        # Total Edge Length Distribution
+        sns.histplot(total_edge_length, bins=20, kde=True, color='black', edgecolor="black", ax=axes[0, 1])
+        axes[0, 1].set_title("Total Edge Length Distribution")
 
-    # Total Edge Length Distribution (Top-Right)
-    sns.histplot(total_edge_length, bins=20, kde=True, color='black', edgecolor="black", ax=axes[0, 1])
-    axes[0, 1].set_xlabel("Total Edge Length")
-    axes[0, 1].set_ylabel("Frequency")
-    axes[0, 1].set_title("Total Edge Length Distribution")
+        # Clustering Coefficient Distribution
+        sns.histplot(clustering, bins=20, kde=True, color='black', edgecolor="black", ax=axes[1, 0])
+        axes[1, 0].set_title("Clustering Coefficient Distribution")
 
-    # Clustering Coefficient Distribution (Bottom-Left)
-    sns.histplot(clustering, bins=20, kde=True, color='black', edgecolor="black", ax=axes[1, 0])
-    axes[1, 0].set_xlabel("Clustering Coefficient")
-    axes[1, 0].set_ylabel("Frequency")
-    axes[1, 0].set_title("Clustering Coefficient Distribution")
+        # Betweenness Centrality Distribution
+        sns.histplot(betweenness, bins=20, kde=True, color='black', edgecolor="black", ax=axes[1, 1])
+        axes[1, 1].set_title("Betweenness Centrality Distribution")
 
-    # Betweenness Centrality Distribution (Bottom-Right)
-    sns.histplot(betweenness, bins=20, kde=True, color='black', edgecolor="black", ax=axes[1, 1])
-    axes[1, 1].set_xlabel("Betweenness Centrality")
-    axes[1, 1].set_ylabel("Frequency")
-    axes[1, 1].set_title("Betweenness Centrality Distribution")
-
-    # Adjust layout to prevent overlap
-    fig.tight_layout()
-
-    # Save the figure as a single image
-    plt.savefig(f"{output_dir}/Graphs/{matrix_name} Graph metrics.png", dpi=300, bbox_inches="tight")
+        fig.tight_layout()
+        plt.savefig(f"{output_dir}/Graphs/{matrix_name} Graph metrics.png", dpi=300, bbox_inches="tight")
 
     print(f"Finished processing {matrix_name}.\n")
 
 print("All matrices processed successfully.")
-
-
-# Load results --------------------------------------------------
-# Load it later
-data = np.load("brain_metrics.npz")
-
-# Assign each metric to a variable
-degree = data['degree']
-total_edge_length = data['total_edge_length']
-clustering = data['clustering']
-betweenness = data['betweenness']
-num_connections = data['num_connections']
-density = data['density']
