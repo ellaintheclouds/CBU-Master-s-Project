@@ -17,7 +17,7 @@ matrix_files = [file for file in glob("kr01/organoid/OrgNets/*.mat")
                 if ("C" in os.path.basename(file) or "H" in os.path.basename(file)) and "dt10" in os.path.basename(file)]
 
 # Define data subset to test with
-matrix_files = matrix_files[:1]  # Use only the first 1 matrix for testing
+# matrix_files = matrix_files[:1]  # Use only the first 1 matrix for testing
 
 # Create empty DataFrames to store metrics for each species
 chimpanzee_metrics_df = pd.DataFrame()
@@ -116,7 +116,7 @@ print("All matrices preprocessed.")
 densities_to_test = [0.05, 0.1, 0.2]  # 5%, 10%, 20% threshold, and unthresholded
 
 # Define densities subset to test
-densities_to_test = densities_to_test[:1]  # Use only the first 1 density for testing
+# densities_to_test = densities_to_test[:1]  # Use only the first 1 density for testing
 
 # Define a function to compute the matching index for a weighted graph
 def matching_index_wei(adjM):
@@ -208,13 +208,13 @@ for matrix_name, species, day_number, adjM, dij, degree, total_edge_length, clus
         output_dir = f"er05/Organoid project scripts/Output/{species}/{int(density_level * 100)}%/{day_number}/Graphs"
         
         # Adjacency matrix heatmap
-        plt.figure(figsize=(6,6))
+        plt.figure(figsize=(7,6))
         sns.heatmap(adjM, cmap="RdBu_r", center=0, cbar=True)
         plt.title("Adjacency Matrix")
         plt.savefig(f"{output_dir}/{matrix_name}_Adjacency_Matrix.png", dpi=300, bbox_inches="tight")
 
         # Distance matrix heatmap
-        plt.figure(figsize=(6,6))
+        plt.figure(figsize=(7,6))
         sns.heatmap(dij, cmap="RdBu_r", center=0, cbar=True)
         plt.title("Distance Matrix")
         plt.savefig(f"{output_dir}/{matrix_name}_Distance_Matrix.png", dpi=300, bbox_inches="tight")
@@ -264,7 +264,7 @@ for matrix_name, species, day_number, adjM, dij, degree, total_edge_length, clus
 
         # Plot correlation heatmap
         plt.figure(figsize=(8, 6))
-        sns.heatmap(correlation_matrix, cmap="magma", xticklabels=False, yticklabels=formatted_labels,)
+        sns.heatmap(correlation_matrix, cmap="RdBu_r", xticklabels=False, yticklabels=formatted_labels, center=0, cbar=True)
         plt.title("Topological Fingerprint Heatmap")
         plt.savefig(f"{output_dir}/{matrix_name}_Topological_Fingerprint.png", dpi=300, bbox_inches="tight")
 
