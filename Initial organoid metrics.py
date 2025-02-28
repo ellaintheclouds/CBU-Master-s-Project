@@ -9,6 +9,7 @@ from glob import glob  # for finding files that match a certain pattern
 from scipy.spatial.distance import cdist  # for computing pairwise Euclidean distances
 from scipy.stats import skew  # for computing skewness
 import pandas as pd  # for data manipulation and analysis
+import pickle  # for saving and loading preprocessed data
 
 
 # %% Load data --------------------------------------------------
@@ -205,9 +206,42 @@ for i, (matrix_name, species, day_number, adjM, dij) in enumerate(preprocessed_d
 print("Connectivity metrics computed.")
 
 
+# %% Save Preprocessed Data --------------------------------------------------
+# Define the path to save the preprocessed data
+preprocessed_data_path = "er05/Organoid project scripts/Output/preprocessed_data.pkl"
+
+with open(preprocessed_data_path, 'wb') as f:
+    pickle.dump(preprocessed_data, f)
+print("Preprocessed data saved to file.")
+
+
+# %% Re-Load Preprocessed Data --------------------------------------------------
+# Define the path to load the preprocessed data
+preprocessed_data_path = "er05/Organoid project scripts/Output/preprocessed_data.pkl"
+
+
+# Load preprocessed data from file
+with open(preprocessed_data_path, 'rb') as f:
+    preprocessed_data = pickle.load(f)
+print("Preprocessed data loaded from file.")
+
+
+# %% Save the results --------------------------------------------------
+chimpanzee_metrics_df.to_csv("er05/Organoid project scripts/Output/chimpanzee_metrics_summary.csv", index=False)
+human_metrics_df.to_csv("er05/Organoid project scripts/Output/human_metrics_summary.csv", index=False)
+
+print("Chimpanzee Metrics DataFrame:")
+print(chimpanzee_metrics_df)
+
+print("Human Metrics DataFrame:")
+print(human_metrics_df)
+
+
 # %% Generate visualisations --------------------------------------------------
 for matrix_name, species, day_number, adjM, dij, degree, total_edge_length, clustering, betweenness, efficiency, matching in preprocessed_data:
     for density_level in densities_to_test:
+        # State which matrix is being visualised
+        print(f"Visualising {matrix_name} at {int(density_level * 100)}% threshold...")
 
         # Set output directory
         output_dir = f"er05/Organoid project scripts/Output/{species}/{int(density_level * 100)}%/{day_number}/Graphs"
@@ -217,12 +251,14 @@ for matrix_name, species, day_number, adjM, dij, degree, total_edge_length, clus
         sns.heatmap(adjM, cmap="RdBu_r", center=0, cbar=True)
         plt.title("Adjacency Matrix")
         plt.savefig(f"{output_dir}/{matrix_name}_Adjacency_Matrix.png", dpi=300, bbox_inches="tight")
+        plt.close()
 
         # Distance matrix heatmap
         plt.figure(figsize=(7,6))
         sns.heatmap(dij, cmap="RdBu_r", center=0, cbar=True)
         plt.title("Distance Matrix")
         plt.savefig(f"{output_dir}/{matrix_name}_Distance_Matrix.png", dpi=300, bbox_inches="tight")
+        plt.close()
 
         # Graph metrics visualisations ----------
         # Create a 2x2 panel figure for the histograms
@@ -247,15 +283,17 @@ for matrix_name, species, day_number, adjM, dij, degree, total_edge_length, clus
         # Save the figure
         fig.tight_layout()
         plt.savefig(f"{output_dir}/{matrix_name}_Graph_Metrics.png", dpi=300, bbox_inches="tight")
+        plt.close()
 
         # "Topological fingerprint" heatmap ----------
         # Convert to DataFrame for correlation analysis
         metrics_df = pd.DataFrame({
             'degree': degree,
-            'total_edge_length': total_edge_length,
             'clustering': clustering,
             'betweenness': betweenness,
-            'efficiency': efficiency
+            'total_edge_length': total_edge_length,
+            'efficiency': efficiency,
+            'matching_index': np.mean(matching, axis=1)
         })
 
         # Compute mean matching index per node
@@ -266,7 +304,7 @@ for matrix_name, species, day_number, adjM, dij, degree, total_edge_length, clus
 
         # Define better-formatted labels
         formatted_labels = [
-            "Degree", "Total Edge Length", "Clustering", "Betweenness", "Efficiency", "Matching Index"
+            "Degree", "Clustering",  "Betweenness", "Total Edge Length", "Efficiency", "Matching Index"
         ]
 
         # Plot correlation heatmap
@@ -274,19 +312,9 @@ for matrix_name, species, day_number, adjM, dij, degree, total_edge_length, clus
         sns.heatmap(correlation_matrix, cmap="RdBu_r", xticklabels=False, yticklabels=formatted_labels, center=0, cbar=True)
         plt.title("Topological Fingerprint Heatmap")
         plt.savefig(f"{output_dir}/{matrix_name}_Topological_Fingerprint.png", dpi=300, bbox_inches="tight")
+        plt.close()
 
 print("Visualisations saved.")
-
-
-# %% Save the results --------------------------------------------------
-chimpanzee_metrics_df.to_csv("er05/Organoid project scripts/Output/chimpanzee_metrics_summary.csv", index=False)
-human_metrics_df.to_csv("er05/Organoid project scripts/Output/human_metrics_summary.csv", index=False)
-
-print("Chimpanzee Metrics DataFrame:")
-print(chimpanzee_metrics_df)
-
-print("Human Metrics DataFrame:")
-print(human_metrics_df)
 
 
 # %%
