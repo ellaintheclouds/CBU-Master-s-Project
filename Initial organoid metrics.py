@@ -23,10 +23,10 @@ matrix_files = [file for file in glob("kr01/organoid/OrgNets/*.mat")
 chimpanzee_metrics_df = pd.DataFrame()
 human_metrics_df = pd.DataFrame()
 
-# Initialize a list to store sorted data
+# Initialise a list to store sorted data
 sorted_data = []
 
-# Sorting each file by species and day --------------------------------------------------
+# Sorting each file by species and day ----------
 for file_path in matrix_files:
     # Extract matrix name (e.g., "matrix1" from "matrices/matrix1.mat")
     matrix_name = os.path.basename(file_path).replace(".mat", "")
@@ -54,7 +54,7 @@ for file_path in matrix_files:
 print("All matrices sorted.")
 
 
-# %% Preprocess adjacency matrices --------------------------------------------------
+# %% Preprocess data  --------------------------------------------------
 preprocessed_data = []
 
 for file_path, matrix_name, species, day_number in sorted_data:
@@ -71,6 +71,7 @@ for file_path, matrix_name, species, day_number in sorted_data:
     # Load adjacency matrix
     adjM = mat_data['adjM']
 
+    # Filter adjM and dij to only include channels with coordinates ----------
     # Extract spike time and associated channel vectors from spike detection data
     data_channel = mat_data['data']['channel'][0][0].flatten()
     data_frameno = mat_data['data']['frameno'][0][0].flatten()
@@ -100,10 +101,11 @@ for file_path, matrix_name, species, day_number in sorted_data:
     adjM = np.delete(adjM, indices, axis=0)
     adjM = np.delete(adjM, indices, axis=1)
 
+    # Preprocess adjacency matrix ----------
     # Remove NaN values but keep shape
     adjM = np.nan_to_num(adjM)
 
-    # Compute distance matrix
+    # Compute distance matrix ----------
     dij = cdist(np.column_stack((x, y)), np.column_stack((x, y)))
 
     # Store preprocessed data for later analysis
@@ -113,10 +115,10 @@ print("All matrices preprocessed.")
 
 
 # %% Compute connectivity metrics --------------------------------------------------
-densities_to_test = [0.05, 0.1, 0.2]  # 5%, 10%, 20% threshold, and unthresholded
+densities_to_test = [0.05, 0.1, 0.2]  # 5%, 10%, 20% thresholds
 
 # Define densities subset to test
-# densities_to_test = densities_to_test[:1]  # Use only the first 1 density for testing
+# densities_to_test = densities_to_test[:1] # Use only the first density for testing
 
 # Define a function to compute the matching index for a weighted graph
 def matching_index_wei(adjM):
@@ -137,6 +139,7 @@ def matching_index_wei(adjM):
 
     return matching_matrix
 
+# Compute connectivity metrics for each matrix ----------
 for i, (matrix_name, species, day_number, adjM, dij) in enumerate(preprocessed_data):
     for density_level in densities_to_test:
         print(f"Computing metrics for {matrix_name} at {int(density_level * 100)}% threshold...")
@@ -158,15 +161,16 @@ for i, (matrix_name, species, day_number, adjM, dij) in enumerate(preprocessed_d
         print("-computing betweenness")
         betweenness = bct.betweenness_wei(1 / (adjM_thresholded + np.finfo(float).eps))
         print("-computing efficiency")
-        efficiency = bct.efficiency_wei(adjM_thresholded, local=True)
+        efficiency = bct.efficiency_wei(adjM_thresholded, local=True) #matrix
         print("-computing matching index")
-        matching = matching_index_wei(adjM_thresholded)
+        matching = matching_index_wei(adjM_thresholded) # matrix
 
+        # Compute density
         num_connections = np.count_nonzero(adjM_thresholded) // 2
         num_nodes = adjM_thresholded.shape[0]
         density = num_connections / ((num_nodes * (num_nodes - 1)) / 2)
 
-        # Compute mean and skewness
+        # Save metrics, including their mean and skewness
         new_row = pd.DataFrame([{
             'matrix_name': matrix_name,
             'species': species,
@@ -201,10 +205,11 @@ for i, (matrix_name, species, day_number, adjM, dij) in enumerate(preprocessed_d
 print("Connectivity metrics computed.")
 
 
-# %% Generate visualizations --------------------------------------------------
-
+# %% Generate visualisations --------------------------------------------------
 for matrix_name, species, day_number, adjM, dij, degree, total_edge_length, clustering, betweenness, efficiency, matching in preprocessed_data:
     for density_level in densities_to_test:
+
+        # Set output directory
         output_dir = f"er05/Organoid project scripts/Output/{species}/{int(density_level * 100)}%/{day_number}/Graphs"
         
         # Adjacency matrix heatmap
@@ -219,7 +224,8 @@ for matrix_name, species, day_number, adjM, dij, degree, total_edge_length, clus
         plt.title("Distance Matrix")
         plt.savefig(f"{output_dir}/{matrix_name}_Distance_Matrix.png", dpi=300, bbox_inches="tight")
 
-        # Create a 2x2 panel figure ----------
+        # Graph metrics visualisations ----------
+        # Create a 2x2 panel figure for the histograms
         fig, axes = plt.subplots(2, 2, figsize=(10, 8))
 
         # Degree Distribution
@@ -238,10 +244,11 @@ for matrix_name, species, day_number, adjM, dij, degree, total_edge_length, clus
         sns.histplot(betweenness, bins=20, kde=True, color='black', edgecolor="black", ax=axes[1, 1])
         axes[1, 1].set_title("Betweenness Centrality Distribution")
 
+        # Save the figure
         fig.tight_layout()
         plt.savefig(f"{output_dir}/{matrix_name}_Graph_Metrics.png", dpi=300, bbox_inches="tight")
 
-        # Topological fingerprint ----------
+        # "Topological fingerprint" heatmap ----------
         # Convert to DataFrame for correlation analysis
         metrics_df = pd.DataFrame({
             'degree': degree,
@@ -268,7 +275,7 @@ for matrix_name, species, day_number, adjM, dij, degree, total_edge_length, clus
         plt.title("Topological Fingerprint Heatmap")
         plt.savefig(f"{output_dir}/{matrix_name}_Topological_Fingerprint.png", dpi=300, bbox_inches="tight")
 
-print("Visualizations saved.")
+print("Visualisations saved.")
 
 
 # %% Save the results --------------------------------------------------
