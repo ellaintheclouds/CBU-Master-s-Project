@@ -51,7 +51,7 @@ for file_path in matrix_files:
     # Store sorted information for later processing
     sorted_data.append((file_path, matrix_name, species, day_number))
 
-print("All matrices sorted successfully.")
+print("All matrices sorted.")
 
 
 # %% Preprocess adjacency matrices --------------------------------------------------
@@ -100,20 +100,42 @@ for file_path, matrix_name, species, day_number in sorted_data:
     adjM = np.delete(adjM, indices, axis=0)
     adjM = np.delete(adjM, indices, axis=1)
 
+    # Remove NaN values but keep shape
+    adjM = np.nan_to_num(adjM)
+
     # Compute distance matrix
     dij = cdist(np.column_stack((x, y)), np.column_stack((x, y)))
 
     # Store preprocessed data for later analysis
     preprocessed_data.append((matrix_name, species, day_number, adjM, dij))
 
-print("All matrices preprocessed successfully.")
+print("All matrices preprocessed.")
 
 
 # %% Compute connectivity metrics --------------------------------------------------
-densities_to_test = [0.05, 0.1, 0.2, 1]  # 5%, 10%, 20% threshold, and unthresholded
+densities_to_test = [0.05, 0.1, 0.2]  # 5%, 10%, 20% threshold, and unthresholded
 
 # Define densities subset to test
 densities_to_test = densities_to_test[:1]  # Use only the first 1 density for testing
+
+# Define a function to compute the matching index for a weighted graph
+def matching_index_wei(adjM):
+    """
+    Computes the matching index for a weighted graph.
+    Returns an NxN matrix where M[i, j] gives the matching index between nodes i and j.
+    """
+    N = adjM.shape[0]
+    matching_matrix = np.zeros((N, N))
+
+    for i in range(N):
+        for j in range(N):
+            if i != j:
+                min_weights = np.minimum(adjM[i, :], adjM[j, :])
+                max_weights = np.maximum(adjM[i, :], adjM[j, :])
+                if np.sum(max_weights) > 0:  # Avoid division by zero
+                    matching_matrix[i, j] = np.sum(min_weights) / np.sum(max_weights)
+
+    return matching_matrix
 
 for i, (matrix_name, species, day_number, adjM, dij) in enumerate(preprocessed_data):
     for density_level in densities_to_test:
@@ -127,10 +149,18 @@ for i, (matrix_name, species, day_number, adjM, dij) in enumerate(preprocessed_d
         adjM_thresholded = bct.threshold_proportional(adjM, density_level)
 
         # Compute network metrics
+        print("-computing degree")
         degree = np.sum(adjM_thresholded != 0, axis=0)
+        print("-computing total edge length")
         total_edge_length = np.sum(adjM_thresholded, axis=0)
+        print("-computing clustering")
         clustering = bct.clustering_coef_bu(adjM_thresholded)
+        print("-computing betweenness")
         betweenness = bct.betweenness_wei(1 / (adjM_thresholded + np.finfo(float).eps))
+        print("-computing efficiency")
+        efficiency = bct.efficiency_wei(adjM_thresholded, local=True)
+        print("-computing matching index")
+        matching = matching_index_wei(adjM_thresholded)
 
         num_connections = np.count_nonzero(adjM_thresholded) // 2
         num_nodes = adjM_thresholded.shape[0]
@@ -142,6 +172,7 @@ for i, (matrix_name, species, day_number, adjM, dij) in enumerate(preprocessed_d
             'species': species,
             'day_number': day_number,
             'density_level': density_level,
+            'num_nodes': num_nodes,
             'num_connections': num_connections,
             'density': density,
             'degree_mean': np.mean(degree),
@@ -151,7 +182,11 @@ for i, (matrix_name, species, day_number, adjM, dij) in enumerate(preprocessed_d
             'clustering_mean': np.mean(clustering),
             'clustering_skew': skew(clustering),
             'betweenness_mean': np.mean(betweenness),
-            'betweenness_skew': skew(betweenness)
+            'betweenness_skew': skew(betweenness),
+            'efficiency_mean': np.mean(efficiency),
+            'efficiency_skew': skew(efficiency),
+            'matching_mean': np.mean(matching),
+            'matching_skew': skew(np.mean(matching, axis=1))
         }])
 
         # Append to the appropriate DataFrame
@@ -161,14 +196,14 @@ for i, (matrix_name, species, day_number, adjM, dij) in enumerate(preprocessed_d
             human_metrics_df = pd.concat([human_metrics_df, new_row], ignore_index=True)
 
         # Update preprocessed_data with computed metrics
-        preprocessed_data[i] = (matrix_name, species, day_number, adjM, dij, degree, total_edge_length, clustering, betweenness)
+        preprocessed_data[i] = (matrix_name, species, day_number, adjM, dij, degree, total_edge_length, clustering, betweenness, efficiency, matching)
 
-print("Connectivity metrics computed successfully.")
+print("Connectivity metrics computed.")
 
 
 # %% Generate visualizations --------------------------------------------------
 
-for matrix_name, species, day_number, adjM, dij, degree, total_edge_length, clustering, betweenness in preprocessed_data:
+for matrix_name, species, day_number, adjM, dij, degree, total_edge_length, clustering, betweenness, efficiency, matching in preprocessed_data:
     for density_level in densities_to_test:
         output_dir = f"er05/Organoid project scripts/Output/{species}/{int(density_level * 100)}%/{day_number}/Graphs"
         
@@ -177,14 +212,12 @@ for matrix_name, species, day_number, adjM, dij, degree, total_edge_length, clus
         sns.heatmap(adjM, cmap="RdBu_r", center=0, cbar=True)
         plt.title("Adjacency Matrix")
         plt.savefig(f"{output_dir}/{matrix_name}_Adjacency_Matrix.png", dpi=300, bbox_inches="tight")
-        plt.close()
 
         # Distance matrix heatmap
         plt.figure(figsize=(6,6))
         sns.heatmap(dij, cmap="RdBu_r", center=0, cbar=True)
         plt.title("Distance Matrix")
         plt.savefig(f"{output_dir}/{matrix_name}_Distance_Matrix.png", dpi=300, bbox_inches="tight")
-        plt.close()
 
         # Create a 2x2 panel figure ----------
         fig, axes = plt.subplots(2, 2, figsize=(10, 8))
@@ -208,6 +241,33 @@ for matrix_name, species, day_number, adjM, dij, degree, total_edge_length, clus
         fig.tight_layout()
         plt.savefig(f"{output_dir}/{matrix_name}_Graph_Metrics.png", dpi=300, bbox_inches="tight")
 
+        # Topological fingerprint ----------
+        # Convert to DataFrame for correlation analysis
+        metrics_df = pd.DataFrame({
+            'degree': degree,
+            'total_edge_length': total_edge_length,
+            'clustering': clustering,
+            'betweenness': betweenness,
+            'efficiency': efficiency
+        })
+
+        # Compute mean matching index per node
+        metrics_df['matching_index'] = np.mean(matching, axis=1)
+
+        # Compute correlation matrix
+        correlation_matrix = metrics_df.corr()
+
+        # Define better-formatted labels
+        formatted_labels = [
+            "Degree", "Total Edge Length", "Clustering", "Betweenness", "Efficiency", "Matching Index"
+        ]
+
+        # Plot correlation heatmap
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(correlation_matrix, cmap="magma", xticklabels=False, yticklabels=formatted_labels,)
+        plt.title("Topological Fingerprint Heatmap")
+        plt.savefig(f"{output_dir}/{matrix_name}_Topological_Fingerprint.png", dpi=300, bbox_inches="tight")
+
 print("Visualizations saved.")
 
 
@@ -220,4 +280,6 @@ print(chimpanzee_metrics_df)
 
 print("Human Metrics DataFrame:")
 print(human_metrics_df)
+
+
 # %%
