@@ -19,12 +19,9 @@ matrix_files = [file for file in glob("kr01/organoid/OrgNets/*.mat") if ("C" in 
 chimpanzee_metrics_df = pd.DataFrame()
 human_metrics_df = pd.DataFrame()
 
-# Create a subset of matrix_files for testing (e.g., first 5 files)
-test_matrix_files = matrix_files[:1]
-
 
 # %% Process each matrix --------------------------------------------------
-for file_path in test_matrix_files:
+for file_path in matrix_files:
     # Sorting each file by species and day --------------------------------------------------
     # Extract matrix name (e.g., "matrix1" from "matrices/matrix1.mat")
     matrix_name = os.path.basename(file_path).replace(".mat", "")
@@ -51,7 +48,7 @@ for file_path in test_matrix_files:
             break
 
     # Define densities to explore
-    densities_to_test = [0.05]  # 5%, 10%, 20% threshold
+    densities_to_test = [0.05, 0.1, 0.2, 1]  # 5%, 10%, 20% threshold, and unthresholded
 
     # Store results for each density
     for density_level in densities_to_test:
