@@ -119,7 +119,7 @@ print("All matrices preprocessed.")
 densities_to_test = [0.05, 0.1, 0.2]  # 5%, 10%, 20% thresholds
 
 # Define densities subset to test
-# densities_to_test = densities_to_test[:1] # Use only the first density for testing
+# densities_to_test = densities_to_test[:2] # Use only the first density for testing
 
 # Define a function to compute the matching index for a weighted graph
 def matching_index_wei(adjM):
@@ -201,7 +201,30 @@ for i, (matrix_name, species, day_number, adjM, dij) in enumerate(preprocessed_d
             human_metrics_df = pd.concat([human_metrics_df, new_row], ignore_index=True)
 
         # Update preprocessed_data with computed metrics
-        preprocessed_data[i] = (matrix_name, species, day_number, adjM, dij, degree, total_edge_length, clustering, betweenness, efficiency, matching)
+        # Store results for the current density level
+        density_results = {
+            'density_level': density_level,
+            'adjM_thresholded': adjM_thresholded,
+            'degree': degree,
+            'total_edge_length': total_edge_length,
+            'clustering': clustering,
+            'betweenness': betweenness,
+            'efficiency': efficiency,
+            'matching': matching
+        }
+
+        # Append results to the entry for this matrix
+        if isinstance(preprocessed_data[i], tuple):  # Convert old structure to new
+            preprocessed_data[i] = {
+                'matrix_name': preprocessed_data[i][0],
+                'species': preprocessed_data[i][1],
+                'day_number': preprocessed_data[i][2],
+                'adjM': preprocessed_data[i][3],
+                'dij': preprocessed_data[i][4],
+                'densities': [density_results]
+            }
+        else:
+            preprocessed_data[i]['densities'].append(density_results)
 
 print("Connectivity metrics computed.")
 
@@ -238,8 +261,21 @@ print(human_metrics_df)
 
 
 # %% Generate visualisations --------------------------------------------------
-for matrix_name, species, day_number, adjM, dij, degree, total_edge_length, clustering, betweenness, efficiency, matching in preprocessed_data:
-    for density_level in densities_to_test:
+for entry in preprocessed_data:
+    matrix_name = entry['matrix_name']
+    species = entry['species']
+    day_number = entry['day_number']
+    
+    for density_data in entry['densities']:
+        density_level = density_data['density_level']
+        adjM_thresholded = density_data['adjM_thresholded']
+        degree = density_data['degree']
+        total_edge_length = density_data['total_edge_length']
+        clustering = density_data['clustering']
+        betweenness = density_data['betweenness']
+        efficiency = density_data['efficiency']
+        matching = density_data['matching']
+
         # State which matrix is being visualised
         print(f"Visualising {matrix_name} at {int(density_level * 100)}% threshold...")
 
@@ -247,41 +283,62 @@ for matrix_name, species, day_number, adjM, dij, degree, total_edge_length, clus
         output_dir = f"er05/Organoid project scripts/Output/{species}/{int(density_level * 100)}%/{day_number}/Graphs"
         
         # Adjacency matrix heatmap
-        plt.figure(figsize=(7,6))
-        sns.heatmap(adjM, cmap="RdBu_r", center=0, cbar=True)
-        plt.title("Adjacency Matrix")
+        plt.figure(figsize=(7, 6))
+        ax = sns.heatmap(adjM_thresholded, cmap="RdBu_r", center=0, cbar=True)
+        ax.set_title("Thresholded Adjacency Matrix", fontsize=14)
+        ax.tick_params(axis='both', which='major', labelsize=10)
+        num_labels = 10  # Number of labels you want to show
+        ax.set_xticks(np.linspace(0, adjM_thresholded.shape[1] - 1, num_labels))
+        ax.set_yticks(np.linspace(0, adjM_thresholded.shape[0] - 1, num_labels))
+        ax.set_xticklabels(np.linspace(0, adjM_thresholded.shape[1] - 1, num_labels, dtype=int))
+        ax.set_yticklabels(np.linspace(0, adjM_thresholded.shape[0] - 1, num_labels, dtype=int))
         plt.savefig(f"{output_dir}/{matrix_name}_Adjacency_Matrix.png", dpi=300, bbox_inches="tight")
         plt.close()
 
         # Distance matrix heatmap
-        plt.figure(figsize=(7,6))
-        sns.heatmap(dij, cmap="RdBu_r", center=0, cbar=True)
-        plt.title("Distance Matrix")
+        plt.figure(figsize=(7, 6))
+        ax = sns.heatmap(dij, cmap="RdBu_r", center=0, cbar=True)
+        ax.set_title("Distance Matrix", fontsize=14)
+        ax.tick_params(axis='both', which='major', labelsize=10)
+        num_labels = 10  # Number of labels you want to show
+        ax.set_xticks(np.linspace(0, dij.shape[1] - 1, num_labels))
+        ax.set_yticks(np.linspace(0, dij.shape[0] - 1, num_labels))
+        ax.set_xticklabels(np.linspace(0, dij.shape[1] - 1, num_labels, dtype=int))
+        ax.set_yticklabels(np.linspace(0, dij.shape[0] - 1, num_labels, dtype=int))
         plt.savefig(f"{output_dir}/{matrix_name}_Distance_Matrix.png", dpi=300, bbox_inches="tight")
         plt.close()
 
         # Graph metrics visualisations ----------
         # Create a 2x2 panel figure for the histograms
-        fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+        fig, axes = plt.subplots(2, 2, figsize=(8, 6))
+
+        # Increase font size
+        font_size = 12
 
         # Degree Distribution
-        sns.histplot(degree, bins=20, kde=True, color='black', edgecolor="black", ax=axes[0, 0])
-        axes[0, 0].set_title("Degree Distribution")
+        sns.histplot(degree, bins=20, kde=True, color='blue', edgecolor="black", ax=axes[0, 0])
+        axes[0, 0].set_title("Degree", fontsize=font_size)
+        axes[0, 0].tick_params(axis='both', which='major', labelsize=font_size)
 
         # Total Edge Length Distribution
-        sns.histplot(total_edge_length, bins=20, kde=True, color='black', edgecolor="black", ax=axes[0, 1])
-        axes[0, 1].set_title("Total Edge Length Distribution")
+        sns.histplot(total_edge_length, bins=20, kde=True, color='blue', edgecolor="black", ax=axes[0, 1])
+        axes[0, 1].set_title("Total Edge Length", fontsize=font_size)
+        axes[0, 1].tick_params(axis='both', which='major', labelsize=font_size)
 
         # Clustering Coefficient Distribution
-        sns.histplot(clustering, bins=20, kde=True, color='black', edgecolor="black", ax=axes[1, 0])
-        axes[1, 0].set_title("Clustering Coefficient Distribution")
+        sns.histplot(clustering, bins=20, kde=True, color='blue', edgecolor="black", ax=axes[1, 0])
+        axes[1, 0].set_title("Clustering Coefficient", fontsize=font_size)
+        axes[1, 0].tick_params(axis='both', which='major', labelsize=font_size)
 
         # Betweenness Centrality Distribution
-        sns.histplot(betweenness, bins=20, kde=True, color='black', edgecolor="black", ax=axes[1, 1])
-        axes[1, 1].set_title("Betweenness Centrality Distribution")
+        sns.histplot(betweenness, bins=20, kde=True, color='blue', edgecolor="black", ax=axes[1, 1])
+        axes[1, 1].set_title("Betweenness Centrality", fontsize=font_size)
+        axes[1, 1].tick_params(axis='both', which='major', labelsize=font_size)
+
+        # Adjust spacing between subplots
+        fig.tight_layout(pad=2.0)
 
         # Save the figure
-        fig.tight_layout()
         plt.savefig(f"{output_dir}/{matrix_name}_Graph_Metrics.png", dpi=300, bbox_inches="tight")
         plt.close()
 
@@ -309,8 +366,9 @@ for matrix_name, species, day_number, adjM, dij, degree, total_edge_length, clus
 
         # Plot correlation heatmap
         plt.figure(figsize=(8, 6))
-        sns.heatmap(correlation_matrix, cmap="RdBu_r", xticklabels=False, yticklabels=formatted_labels, center=0, cbar=True)
-        plt.title("Topological Fingerprint Heatmap")
+        ax = sns.heatmap(correlation_matrix, cmap="RdBu_r", xticklabels=formatted_labels, yticklabels=formatted_labels, center=0, cbar=True)
+        ax.set_title("Topological Fingerprint Heatmap", fontsize=14)
+        ax.tick_params(axis='both', which='major', labelsize=10)
         plt.savefig(f"{output_dir}/{matrix_name}_Topological_Fingerprint.png", dpi=300, bbox_inches="tight")
         plt.close()
 
