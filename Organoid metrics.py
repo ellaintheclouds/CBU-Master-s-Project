@@ -271,15 +271,33 @@ else:
 
 
 # %% Generate visualisations --------------------------------------------------
-# Set output directory for organoid (without density)
-output_dir_short = f"er05/Organoid project scripts/Output/{species}"
 
+# Process data for visualisations *across thresholds* ----------
+# Define variables for visualisations
 for entry in preprocessed_data:
     matrix_name = entry['matrix_name']
     species = entry['species']
     day_number = entry['day_number']
     dij = entry['dij']
     
+    # Define the timepoint based on the day number
+    if day_number in ["Day 95", "Day 96"]:
+        timepoint = "t1"
+    elif day_number == "Day 153":
+        timepoint = "t2"
+    elif day_number in ["Day 184", "Day 185"]:
+        timepoint = "t3"
+    else:
+        timepoint = "Unknown Timepoint"
+
+    # Create output directory
+    output_dir_short = f"er05/Organoid project scripts/Output/{species}"
+    os.makedirs(f"{output_dir_short}/{timepoint}", exist_ok=True)
+
+    # State which matrix is being visualised
+    print(f"Visualising {matrix_name}:")
+    print("- plotting metrics across thresholds")
+
     # Graph metrics visualisations ----------
     # Create a 2x2 panel figure for the histograms
     fig, axes = plt.subplots(2, 2, figsize=(10, 8))
@@ -287,6 +305,7 @@ for entry in preprocessed_data:
     # Increase font size
     font_size = 12
 
+    # Define colours for each density level
     density_colours = ["#440154", "#B12A90", "#F46D43", "#FDE725"]
 
     # Iterate over density levels and plot each on the same set of axes
@@ -296,8 +315,6 @@ for entry in preprocessed_data:
         total_edge_length = density_data['total_edge_length']
         clustering = density_data['clustering']
         betweenness = density_data['betweenness']
-
-        print(f"Visualising {matrix_name} metrics at {int(density_level * 100)}% threshold...")
 
         # Degree Distribution
         sns.kdeplot(degree, color=density_colours[idx], ax=axes[0, 0], label=f"{int(density_level * 100)}%", linewidth=3, alpha=0.7)
@@ -326,9 +343,102 @@ for entry in preprocessed_data:
     fig.tight_layout(pad=2.0)
 
     # Save the figure
-    plt.savefig(f"{output_dir_short}/{matrix_name}_Graph_Metrics.png", dpi=300, bbox_inches="tight")
+    plt.savefig(f"{output_dir_short}/{timepoint}/{matrix_name}_Graph_Metrics.png", dpi=300, bbox_inches="tight")
     plt.close()
 
+    # "Topological fingerprint" correlation ----------
+    # Define the organoid slices that I want to use as timepoints
+    chosen_slices = ["C_d96_s2_dt10", "C_d153_s7_dt10", "C_d184_s8_dt10"]
+    chosen_density = 0.1
+
+    # Create a subset of the DataFrame
+    chimpanzee_metrics_df_subset = chimpanzee_metrics_df[
+        (chimpanzee_metrics_df['matrix_name'].isin(chosen_slices)) &
+        (chimpanzee_metrics_df['density_level'] == chosen_density)
+    ]
+
+    chimpanzee_metrics_df_subset = chimpanzee_metrics_df_subset[
+        ['degree_mean', 'clustering_mean', 'betweenness_mean', 'total_edge_length_mean', 'efficiency_mean', 'matching_mean']
+    ]
+
+    # Compute correlation matrix
+    CS_correlation_matrix = chimpanzee_metrics_df_subset.corr()
+
+    # Plot correlation heatmap
+    plt.figure(figsize=(8, 6))
+    ax = sns.heatmap(CS_correlation_matrix, cmap="RdBu_r", xticklabels=formatted_labels, yticklabels=formatted_labels, center=0, cbar=True)
+    ax.set_title("Topological Fingerprint Correlation Across Time", fontsize=14)
+    ax.tick_params(axis='both', which='major', labelsize=10)
+    plt.savefig(f"{output_dir_short}/Topological_Fingerprint_Correlation_s2_s7_s10_dt10.png", dpi=300, bbox_inches="tight")
+    plt.close()        
+
+    # "Topological fingerprint" coefficient of variation ----------
+    # Define the columns of interest
+    metrics_columns = ['degree_mean', 'clustering_mean', 'betweenness_mean', 'total_edge_length_mean', 'efficiency_mean', 'matching_mean']
+
+    # Function to calculate the coefficient of variation
+    def calculate_cv(series):
+        return series.std() / series.mean()
+
+    # Group by matrix_name and calculate the CV for each metric
+    cv_results = chimpanzee_metrics_df.groupby('matrix_name')[metrics_columns].apply(lambda x: x.apply(calculate_cv))
+
+    # Add back day numbers
+    day_numbers = chimpanzee_metrics_df[['matrix_name', 'day_number']].drop_duplicates()
+    cv_results_with_day = pd.merge(cv_results, day_numbers, on='matrix_name', how='left')
+
+    # Plot the coefficient of variation for each metric as a boxplot (overlaid with dots)
+    # Melt the DataFrame to long format for easier plotting with seaborn
+    cv_results_melted = cv_results_with_day.melt(id_vars=['matrix_name', 'day_number'], var_name='Metric', value_name='Coefficient of Variation')
+
+    # Define better-formatted labels
+    formatted_labels = [
+        "Degree", "Clustering",  "Betweenness", "Total Edge Length", "Efficiency", "Matching Index"
+    ]
+
+    # Define timepoints
+    timepoints = {
+        't1': ["Day 95", "Day 96"],
+        't2': ["Day 153"],
+        't3': ["Day 184", "Day 185"]
+    }
+
+    # Define colors for each timepoint
+    timepoint_colors = {
+        't1': sns.color_palette("magma", as_cmap=True)(0.2),
+        't2': sns.color_palette("magma", as_cmap=True)(0.5),
+        't3': sns.color_palette("magma", as_cmap=True)(0.8)
+    }
+
+    # Plot the data for each timepoint on the same axis
+    plt.figure(figsize=(12, 8))
+    for tp, days in timepoints.items():
+        tp_data = cv_results_melted[cv_results_melted['day_number'].isin(days)]
+                
+        if not tp_data.empty:
+            sns.boxplot(x='Metric', y='Coefficient of Variation', data=tp_data, color=timepoint_colors[tp], ax=plt.gca())
+            sns.stripplot(x='Metric', y='Coefficient of Variation', data=tp_data, color=timepoint_colors[tp], dodge=True, jitter=True, ax=plt.gca(), size=8, alpha=0.6, label=tp.upper())
+
+    # Set plot title and labels
+    plt.title('Coefficient of Variation for Different Metrics', fontsize=20)
+    plt.xlabel('Metric', fontsize=18)
+    plt.ylabel('Coefficient of Variation', fontsize=18)
+    plt.xticks(ticks=range(len(formatted_labels)), labels=formatted_labels)
+    plt.yticks(fontsize=16)
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    plt.legend(title='Timepoint', bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=14, title_fontsize=16)
+    plt.tight_layout()
+
+    # Remove duplicate legend entries
+    handles, labels = plt.gca().get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    plt.legend(by_label.values(), by_label.keys(), title='Timepoint', bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=14, title_fontsize=16)
+
+    # Save and close
+    plt.savefig(f"{output_dir_short}/Metrics_CVs.png", dpi=300, bbox_inches="tight")
+    plt.close()
+
+    # Process data for visualisations *for each threshold* ----------
     for density_data in entry['densities']:
         density_level = density_data['density_level']
         adjM_thresholded = density_data['adjM_thresholded']
@@ -339,12 +449,12 @@ for entry in preprocessed_data:
         efficiency = density_data['efficiency']
         matching = density_data['matching']
 
-        # Create output directories for species, density, and day
-        output_dir = f"er05/Organoid project scripts/Output/{species}/{int(density_level * 100)}%/{day_number}"
-        os.makedirs(f"{output_dir}", exist_ok=True)
+        # Create output directory
+        output_dir = f"er05/Organoid project scripts/Output/{species}/{timepoint}/{int(density_level * 100)}%"
+        os.makedirs(output_dir, exist_ok=True)
 
         # State which matrix is being visualised
-        print(f"Visualising {matrix_name} at {int(density_level * 100)}% threshold...")
+        print(f"- plotting heatmaps at {int(density_level * 100)}% threshold")
         
         # Adjacency matrix heatmap ----------
         plt.figure(figsize=(7, 6))
@@ -402,105 +512,7 @@ for entry in preprocessed_data:
         plt.savefig(f"{output_dir}/{matrix_name}_Topological_Fingerprint.png", dpi=300, bbox_inches="tight")
         plt.close()
 
-print("Individual visualisations saved.")
-
-# "Topological fingerprint" coefficient of variation ----------
-# Define the columns of interest
-metrics_columns = ['degree_mean', 'clustering_mean', 'betweenness_mean', 'total_edge_length_mean', 'efficiency_mean', 'matching_mean']
-
-# Function to calculate the coefficient of variation
-def calculate_cv(series):
-    return series.std() / series.mean()
-
-# Group by matrix_name and calculate the CV for each metric
-cv_results = chimpanzee_metrics_df.groupby('matrix_name')[metrics_columns].apply(lambda x: x.apply(calculate_cv))
-
-# Add back day numbers
-day_numbers = chimpanzee_metrics_df[['matrix_name', 'day_number']].drop_duplicates()
-cv_results_with_day = pd.merge(cv_results, day_numbers, on='matrix_name', how='left')
-
-# Plot the coefficient of variation for each metric as a boxplot (overlaid with dots)
-# Melt the DataFrame to long format for easier plotting with seaborn
-cv_results_melted = cv_results_with_day.melt(id_vars=['matrix_name', 'day_number'], var_name='Metric', value_name='Coefficient of Variation')
-
-# Define better-formatted labels
-formatted_labels = [
-    "Degree", "Clustering",  "Betweenness", "Total Edge Length", "Efficiency", "Matching Index"
-]
-
-# Define timepoints
-timepoints = {
-    't1': ["Day 95", "Day 96"],
-    't2': ["Day 153"],
-    't3': ["Day 184", "Day 185"]
-}
-
-# Define colors for each timepoint
-timepoint_colors = {
-    't1': sns.color_palette("magma", as_cmap=True)(0.2),
-    't2': sns.color_palette("magma", as_cmap=True)(0.5),
-    't3': sns.color_palette("magma", as_cmap=True)(0.8)
-}
-
-# Plot the data for each timepoint on the same axis
-plt.figure(figsize=(12, 8))
-for tp, days in timepoints.items():
-    tp_data = cv_results_melted[cv_results_melted['day_number'].isin(days)]
-    
-    # Debugging: Print the filtered data to ensure it's not empty
-    print(f"Data for {tp}:")
-    print(tp_data)
-    
-    if not tp_data.empty:
-        sns.boxplot(x='Metric', y='Coefficient of Variation', data=tp_data, color=timepoint_colors[tp], ax=plt.gca())
-        sns.stripplot(x='Metric', y='Coefficient of Variation', data=tp_data, color=timepoint_colors[tp], dodge=True, jitter=True, ax=plt.gca(), size=8, alpha=0.6, label=tp.upper())
-
-# Set plot title and labels
-plt.title('Coefficient of Variation for Different Metrics', fontsize=20)
-plt.xlabel('Metric', fontsize=18)
-plt.ylabel('Coefficient of Variation', fontsize=18)
-plt.xticks(ticks=range(len(formatted_labels)), labels=formatted_labels)
-plt.yticks(fontsize=16)
-plt.grid(axis='y', linestyle='--', alpha=0.7)
-plt.legend(title='Timepoint', bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=14, title_fontsize=16)
-plt.tight_layout()
-
-# Remove duplicate legend entries
-handles, labels = plt.gca().get_legend_handles_labels()
-by_label = dict(zip(labels, handles))
-plt.legend(by_label.values(), by_label.keys(), title='Timepoint', bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=14, title_fontsize=16)
-
-# Save and close
-plt.savefig(f"{output_dir_short}/Metrics_CVs.png", dpi=300, bbox_inches="tight")
-plt.close()
-
-# "Topological fingerprint" correlation ----------
-# Define the organoid slices that I want to use as timepoints
-chosen_slices = ["C_d96_s2_dt10", "C_d153_s7_dt10", "C_d184_s8_dt10"]
-chosen_density = 0.1
-
-# Create a subset of the DataFrame
-chimpanzee_metrics_df_subset = chimpanzee_metrics_df[
-    (chimpanzee_metrics_df['matrix_name'].isin(chosen_slices)) &
-    (chimpanzee_metrics_df['density_level'] == chosen_density)
-]
-
-chimpanzee_metrics_df_subset = chimpanzee_metrics_df_subset[
-    ['degree_mean', 'clustering_mean', 'betweenness_mean', 'total_edge_length_mean', 'efficiency_mean', 'matching_mean']
-]
-
-# Compute correlation matrix
-CS_correlation_matrix = chimpanzee_metrics_df_subset.corr()
-
-# Plot correlation heatmap
-plt.figure(figsize=(8, 6))
-ax = sns.heatmap(CS_correlation_matrix, cmap="RdBu_r", xticklabels=formatted_labels, yticklabels=formatted_labels, center=0, cbar=True)
-ax.set_title("Topological Fingerprint Heatmap", fontsize=14)
-ax.tick_params(axis='both', which='major', labelsize=10)
-plt.savefig(f"{output_dir_short}/Topological_Fingerprint_Correlation_s2_s7_s10_dt10.png", dpi=300, bbox_inches="tight")
-plt.close()
-
-print("Overall visualisations saved.")
+print("All visualisations saved.")
 
 
 # %% Extra script to create dij without loaded data
