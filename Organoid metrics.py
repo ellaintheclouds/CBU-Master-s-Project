@@ -119,7 +119,7 @@ print("All matrices preprocessed.")
 
 
 # %% Compute connectivity metrics --------------------------------------------------
-densities_to_test = [0.05, 0.1, 0.2, 1]  # 5%, 10%, 20% thresholds
+densities_to_test = [0.05, 0.1, 0.2]  # 5%, 10%, 20% thresholds
 
 # Define densities subset to test
 # densities_to_test = densities_to_test[:2] # Use only the first density for testing
@@ -147,10 +147,6 @@ def matching_index_wei(adjM):
 for i, (matrix_name, species, day_number, adjM, dij) in enumerate(preprocessed_data):
     for density_level in densities_to_test:
         print(f"Computing metrics for {matrix_name} at {int(density_level * 100)}% threshold...")
-
-        # Create output directories for species, density, and day
-        output_dir = f"er05/Organoid project scripts/Output/{species}/{int(density_level * 100)}%/{day_number}"
-        os.makedirs(f"{output_dir}/Graphs", exist_ok=True)
 
         # Apply thresholding
         adjM_thresholded = bct.threshold_proportional(adjM, density_level)
@@ -342,6 +338,10 @@ for entry in preprocessed_data:
         betweenness = density_data['betweenness']
         efficiency = density_data['efficiency']
         matching = density_data['matching']
+
+        # Create output directories for species, density, and day
+        output_dir = f"er05/Organoid project scripts/Output/{species}/{int(density_level * 100)}%/{day_number}"
+        os.makedirs(f"{output_dir}", exist_ok=True)
 
         # State which matrix is being visualised
         print(f"Visualising {matrix_name} at {int(density_level * 100)}% threshold...")
