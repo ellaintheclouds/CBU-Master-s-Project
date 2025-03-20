@@ -122,7 +122,7 @@ print("All matrices preprocessed.")
 densities_to_test = [0.05, 0.1, 0.2]  # 5%, 10%, 20% thresholds
 
 # Define densities subset to test
-# densities_to_test = densities_to_test[:2] # Use only the first density for testing
+#densities_to_test = densities_to_test[:1] # Use only the first density for testing
 
 # Define a function to compute the matching index for a weighted graph
 def matching_index_wei(adjM):
@@ -228,7 +228,7 @@ for i, (matrix_name, species, day_number, adjM, dij) in enumerate(preprocessed_d
 print("Connectivity metrics computed.")
 
 
-# %% Save the results --------------------------------------------------
+# %% Save metrics --------------------------------------------------
 chimpanzee_metrics_df.to_csv("er05/Organoid project scripts/Output/chimpanzee_metrics_summary.csv", index=False)
 human_metrics_df.to_csv("er05/Organoid project scripts/Output/human_metrics_summary.csv", index=False)
 
@@ -240,6 +240,9 @@ print(human_metrics_df)
 
 
 # %% Save Preprocessed Data --------------------------------------------------
+# Set working directory
+os.chdir("/imaging/astle")
+
 # Define the path to save the preprocessed data
 preprocessed_data_path = "er05/Organoid project scripts/Output/preprocessed_data.pkl"
 
@@ -249,12 +252,11 @@ print("Preprocessed data saved to file.")
 
 
 # %% Re-Load Preprocessed Data --------------------------------------------------
-"""
-# Define the path to load the preprocessed data
-preprocessed_data_path = "er05/Organoid project scripts/Output/preprocessed_data.pkl"
-
 # Set working directory
 os.chdir("/imaging/astle")
+
+# Define the path to load the preprocessed data
+preprocessed_data_path = "er05/Organoid project scripts/Output/preprocessed_data.pkl"
 
 # Check if the file exists and is not empty
 if os.path.exists(preprocessed_data_path) and os.path.getsize(preprocessed_data_path) > 0:
@@ -267,11 +269,17 @@ if os.path.exists(preprocessed_data_path) and os.path.getsize(preprocessed_data_
         print(f"Error loading preprocessed data: {e}")
 else:
     print(f"File {preprocessed_data_path} does not exist or is empty.")
-"""
+
+# Load metrics DataFrames
+chimpanzee_metrics_df = pd.read_csv("er05/Organoid project scripts/Output/chimpanzee_metrics_summary.csv")
+human_metrics_df = pd.read_csv("er05/Organoid project scripts/Output/human_metrics_summary.csv")
+
+# Check if the Dataframes exist and are not empty
+if not chimpanzee_metrics_df.empty:
+    print("Metrics Dataframes loaded successfully.")
 
 
 # %% Generate visualisations --------------------------------------------------
-
 # Process data for visualisations *across thresholds* ----------
 # Define variables for visualisations
 for entry in preprocessed_data:
@@ -416,7 +424,6 @@ for entry in preprocessed_data:
         tp_data = cv_results_melted[cv_results_melted['day_number'].isin(days)]
                 
         if not tp_data.empty:
-            sns.boxplot(x='Metric', y='Coefficient of Variation', data=tp_data, color=timepoint_colors[tp], ax=plt.gca())
             sns.stripplot(x='Metric', y='Coefficient of Variation', data=tp_data, color=timepoint_colors[tp], dodge=True, jitter=True, ax=plt.gca(), size=8, alpha=0.6, label=tp.upper())
 
     # Set plot title and labels
