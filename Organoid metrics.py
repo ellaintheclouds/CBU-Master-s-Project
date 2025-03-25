@@ -1,80 +1,34 @@
 # %% Import packages --------------------------------------------------
-import os  # for file and directory operations
-import scipy.io  # for loading .mat files (MATLAB data)
-import matplotlib.pyplot as plt  # for plotting - the "as plt" part allows us to refer to the package as plt
-import numpy as np  # for numerical operations (e.g. matrix manipulation)
-import seaborn as sns  # for heatmaps and enhanced data visualisation
-import bct  # for graph-theoretic analysis (from the brain connectivity toolbox)
-from glob import glob  # for finding files that match a certain pattern
-from scipy.spatial.distance import cdist  # for computing pairwise Euclidean distances
-from scipy.stats import skew  # for computing skewness
-import pandas as pd  # for data manipulation and analysis
-import pickle  # for saving and loading preprocessed data
+import os  # File operations
+import scipy.io  # Load MATLAB .mat files
+import matplotlib.pyplot as plt  # Plotting
+import numpy as np  # Numerical operations
+import seaborn as sns  # Data visualisation
+import bct  # Brain Connectivity Toolbox (graph-theoretic analysis)
+from glob import glob  # Finding files that match a pattern
+from scipy.spatial.distance import cdist  # Pairwise Euclidean distances
+from scipy.stats import skew  # Compute skewness
+import pandas as pd  # Data manipulation
+import pickle  # Save/load processed data
+import time  # Time operations
 
 
-# %% Load data --------------------------------------------------
-# # Set working directory
-os.chdir("/imaging/astle")
+# %% Define Functions --------------------------------------------------
+def load_files(matrix_dir):
+    """Load .mat files from a specified directory and filter based on a pattern."""
+    matrix_files = [file for file in glob('kr01/organoid/OrgNets/*.mat') 
+                if ('C' in os.path.basename(file) or 'H' in os.path.basename(file)) and 'dt10' in os.path.basename(file)]
 
-# List all .mat files in the "matrices/" folder
-matrix_files = [file for file in glob("kr01/organoid/OrgNets/*.mat") 
-                if ("C" in os.path.basename(file) or "H" in os.path.basename(file)) and "dt10" in os.path.basename(file)]
+    return matrix_files
 
-# Define data subset to test with
-#matrix_files = matrix_files[:1]  # Use only the first 1 matrix for testing
-
-# Create empty DataFrames to store metrics for each species
-chimpanzee_metrics_df = pd.DataFrame()
-human_metrics_df = pd.DataFrame()
-
-# Initialise a list to store sorted data
-sorted_data = []
-
-# Sorting each file by species and day ----------
-for file_path in matrix_files:
-    # Extract matrix name (e.g., "matrix1" from "matrices/matrix1.mat")
-    matrix_name = os.path.basename(file_path).replace(".mat", "")
-    print(f"Sorting {matrix_name}...")
-
-    # Determine species
-    if "C" in matrix_name:
-        species = "Chimpanzee"
-    elif "H" in matrix_name:
-        species = "Human"
-    else:
-        print(f"Skipping {matrix_name}: No valid species identifier (C or H).")
-        continue  # Skip files without valid species identifiers
-
-    # Determine day number
-    day_number = "Unknown Day"
-    for i in range(1, 365):  # Check for d1 to d365
-        if f"_d{i}_" in matrix_name:
-            day_number = f"Day {i}"
-            break
-
-    # Store sorted information for later processing
-    sorted_data.append((file_path, matrix_name, species, day_number))
-
-print("All matrices sorted.")
-
-
-# %% Preprocess data  --------------------------------------------------
-preprocessed_data = []
-
-for file_path, matrix_name, species, day_number in sorted_data:
-    print(f"Preprocessing {matrix_name}...")
-
-    # Load organoid data
+def process_data(file_path):
+    """Load and process a single .mat file."""
+    file_name = os.path.basename(file_path).replace('.mat', '')
     mat_data = scipy.io.loadmat(file_path)
-
-    # Ensure 'adjM' exists in the loaded data
-    if "adjM" not in mat_data:
-        print(f"Skipping {matrix_name}: 'adjM' key not found.")
-        continue
-
-    # Load adjacency matrix
-    adjM = mat_data['adjM']
-
+    
+    # Load adjacency matrix and process it
+    adjM = np.nan_to_num(mat_data['adjM'])
+    
     # Filter adjM and dij to only include channels with coordinates ----------
     # Extract spike time and associated channel vectors from spike detection data
     data_channel = mat_data['data']['channel'][0][0].flatten()
@@ -104,75 +58,103 @@ for file_path, matrix_name, species, day_number in sorted_data:
     indices = np.where(np.isin(np.unique(data_channel), difference))[0]
     adjM = np.delete(adjM, indices, axis=0)
     adjM = np.delete(adjM, indices, axis=1)
-
-    # Preprocess adjacency matrix ----------
-    # Remove NaN values but keep shape
-    adjM = np.nan_to_num(adjM)
-
-    # Compute distance matrix ----------
+    
+    # Compute distance matrix
     dij = cdist(np.column_stack((x, y)), np.column_stack((x, y)))
+    
+    return file_name, adjM, dij
 
-    # Store preprocessed data for later analysis
-    preprocessed_data.append((matrix_name, species, day_number, adjM, dij))
+def sort_data(file_name):
+    """Sort data based on species and day number."""
+    species = 'Chimpanzee' if 'C' in file_name else 'Human' if 'H' in file_name else None
+    day_number = next((f'Day {i}' for i in range(1, 365) if f'_d{i}_' in file_name), 'Unknown Day')
 
-print("All matrices preprocessed.")
+    # Define the timepoint based on the day number
+    if day_number in ['Day 95', 'Day 96']:
+        timepoint = 't1'
+    elif day_number == 'Day 153':
+        timepoint = 't2'
+    elif day_number in ['Day 184', 'Day 185']:
+        timepoint = 't3'
+    else:
+        timepoint = 'Unknown Timepoint'
+    return species, day_number, timepoint
 
+    # Store sorted information for later processing
+    processed_data.append((file_name, species, day_number, timepoint))
 
-# %% Compute connectivity metrics --------------------------------------------------
-densities_to_test = [0.05, 0.1, 0.2]  # 5%, 10%, 20% thresholds
+    print('All matrices sorted.')
 
-# Define densities subset to test
-#densities_to_test = densities_to_test[:1] # Use only the first density for testing
-
-# Define a function to compute the matching index for a weighted graph
-def matching_index_wei(adjM):
-    """
-    Computes the matching index for a weighted graph.
-    Returns an NxN matrix where M[i, j] gives the matching index between nodes i and j.
-    """
-    N = adjM.shape[0]
-    matching_matrix = np.zeros((N, N))
-
-    for i in range(N):
-        for j in range(N):
-            if i != j:
-                min_weights = np.minimum(adjM[i, :], adjM[j, :])
-                max_weights = np.maximum(adjM[i, :], adjM[j, :])
-                if np.sum(max_weights) > 0:  # Avoid division by zero
-                    matching_matrix[i, j] = np.sum(min_weights) / np.sum(max_weights)
-
-    return matching_matrix
-
-# Compute connectivity metrics for each matrix ----------
-for i, (matrix_name, species, day_number, adjM, dij) in enumerate(preprocessed_data):
-    for density_level in densities_to_test:
-        print(f"Computing metrics for {matrix_name} at {int(density_level * 100)}% threshold...")
-
-        # Apply thresholding
+def compute_metrics(file_name, species, day_number, adjM, density_levels, chimpanzee_metrics_df, human_metrics_df):
+    """Compute graph theory metrics at different thresholds."""
+    metrics_list = []
+    
+    for density_level in density_levels:
         adjM_thresholded = bct.threshold_proportional(adjM, density_level)
-
-        # Compute network metrics
-        print("-computing degree")
+        
+        # Compute graph metrics
+        start_time = time.time()
         degree = np.sum(adjM_thresholded != 0, axis=0)
-        print("-computing total edge length")
-        total_edge_length = np.sum(adjM_thresholded, axis=0)
-        print("-computing clustering")
-        clustering = bct.clustering_coef_bu(adjM_thresholded)
-        print("-computing betweenness")
-        betweenness = bct.betweenness_wei(1 / (adjM_thresholded + np.finfo(float).eps))
-        print("-computing efficiency")
-        efficiency = bct.efficiency_wei(adjM_thresholded, local=True) #matrix
-        print("-computing matching index")
-        matching = matching_index_wei(adjM_thresholded) # matrix
+        end_time = time.time()
+        print(f'    - degree computed in {end_time - start_time:.1f} seconds')
 
+        start_time = time.time()
+        total_edge_length = np.sum(adjM_thresholded, axis=0)
+        end_time = time.time()
+        print(f'    - total edge length computed in {end_time - start_time:.1f} seconds')
+
+        start_time = time.time()
+        clustering = bct.clustering_coef_bu(adjM_thresholded)
+        end_time = time.time()
+        print(f'    - clustering computed in {end_time - start_time:.1f} seconds')
+
+        start_time = time.time()
+        betweenness = bct.betweenness_wei(1 / (adjM_thresholded + np.finfo(float).eps))
+        end_time = time.time()
+        print(f'    - betweenness computed in {end_time - start_time:.1f} seconds')
+
+        start_time = time.time()
+        efficiency = bct.efficiency_wei(adjM_thresholded, local=True)
+        end_time = time.time()
+        print(f'    - efficiency computed in {end_time - start_time:.1f} seconds')
+
+        #  Compute NxN matrix where M[i, j] gives the matching index between nodes i and j
+        start_time = time.time()
+        N = adjM.shape[0]
+        matching_matrix = np.zeros((N, N))
+
+        for i in range(N):
+            for j in range(N):
+                if i != j:
+                    min_weights = np.minimum(adjM[i, :], adjM[j, :])
+                    max_weights = np.maximum(adjM[i, :], adjM[j, :])
+                    if np.sum(max_weights) > 0:  # Avoid division by zero
+                        matching_matrix[i, j] = np.sum(min_weights) / np.sum(max_weights)
+        end_time = time.time()
+        print(f'    - matching index computed in {end_time - start_time:.1f} seconds')
+
+        # Save graph metrics
+        metrics = {
+            'density_level': density_level,
+            'adjM_thresholded': adjM_thresholded,
+            'degree': degree,
+            'total_edge_length': total_edge_length,
+            'clustering': clustering,
+            'betweenness': betweenness,
+            'efficiency': efficiency,
+            'matching_index': matching_matrix
+        }
+        metrics_list.append(metrics)
+
+        # Compute and save statistics for each metric
         # Compute density
         num_connections = np.count_nonzero(adjM_thresholded) // 2
         num_nodes = adjM_thresholded.shape[0]
         density = num_connections / ((num_nodes * (num_nodes - 1)) / 2)
 
         # Save metrics, including their mean and skewness
-        new_row = pd.DataFrame([{
-            'matrix_name': matrix_name,
+        metrics_stats = pd.DataFrame([{
+            'file_name': file_name,
             'species': species,
             'day_number': day_number,
             'density_level': density_level,
@@ -189,122 +171,119 @@ for i, (matrix_name, species, day_number, adjM, dij) in enumerate(preprocessed_d
             'betweenness_skew': skew(betweenness),
             'efficiency_mean': np.mean(efficiency),
             'efficiency_skew': skew(efficiency),
-            'matching_mean': np.mean(matching),
-            'matching_skew': skew(np.mean(matching, axis=1))
+            'matching_mean': np.mean(matching_matrix),
+            'matching_skew': skew(np.mean(matching_matrix, axis=1))
         }])
 
-        # Append to the appropriate DataFrame
-        if species == "Chimpanzee":
-            chimpanzee_metrics_df = pd.concat([chimpanzee_metrics_df, new_row], ignore_index=True)
+        if species == 'Chimpanzee':
+            chimpanzee_metrics_df = pd.concat([chimpanzee_metrics_df, metrics_stats], ignore_index=True)
         else:
-            human_metrics_df = pd.concat([human_metrics_df, new_row], ignore_index=True)
+            human_metrics_df = pd.concat([human_metrics_df, metrics_stats], ignore_index=True)
 
-        # Update preprocessed_data with computed metrics
-        # Store results for the current density level
-        density_results = {
-            'density_level': density_level,
-            'adjM_thresholded': adjM_thresholded,
+    return metrics_list, chimpanzee_metrics_df, human_metrics_df
+
+def save_data(output_dir, pickle_dir, processed_data, chimpanzee_metrics_df, human_metrics_df):
+    """Save data incrementally to a pickle file."""
+    
+    chimpanzee_metrics_df.to_csv(f'{output_dir}/Chimpanzee/chimpanzee_metrics_summary.csv', index=False)
+    human_metrics_df.to_csv(f'{output_dir}/Human/human_metrics_summary.csv', index=False)
+
+    with open(pickle_dir, 'wb') as f:
+        pickle.dump(processed_data, f)
+
+def load_data(pickle_dir):
+    """Load processed data from a pickle file."""
+    with open(pickle_dir, 'rb') as f:
+        processed_data = pickle.load(f)
+    return processed_data
+
+def individual_plot(processed_data_idx, output_dir):
+    """Generate and save plots for individual densities."""
+    matrix_name = processed_data_idx['file_name']
+    species = processed_data_idx['species']
+    timepoint = processed_data_idx['timepoint']
+    dij = processed_data_idx['dij']
+
+    for density_data in processed_data_idx['metrics']:
+        density_level = density_data['density_level']
+        adjM_thresholded = density_data['adjM_thresholded']
+        degree = density_data['degree']
+        total_edge_length = density_data['total_edge_length']
+        clustering = density_data['clustering']
+        betweenness = density_data['betweenness']
+        efficiency = density_data['efficiency']
+        matching_matrix = density_data['matching_index']
+
+        # Create output directory
+        plot_dir = os.path.join(output_dir, species, timepoint, f'{int(density_level * 100)}%')
+        os.makedirs(plot_dir, exist_ok=True)
+        
+        # Adjacency matrix heatmap
+        plt.figure(figsize=(7, 6))
+        ax = sns.heatmap(adjM_thresholded, cmap='RdBu_r', center=0, cbar=True)
+        ax.set_title('Thresholded Adjacency Matrix', fontsize=14)
+        ax.tick_params(axis='both', which='major', labelsize=10)
+        num_labels = 10  # Number of labels you want to show
+        ax.set_xticks(np.linspace(0, adjM_thresholded.shape[1] - 1, num_labels))
+        ax.set_yticks(np.linspace(0, adjM_thresholded.shape[0] - 1, num_labels))
+        ax.set_xticklabels(np.linspace(0, adjM_thresholded.shape[1] - 1, num_labels, dtype=int))
+        ax.set_yticklabels(np.linspace(0, adjM_thresholded.shape[0] - 1, num_labels, dtype=int))
+        plt.savefig(f'{plot_dir}/{matrix_name}_Adjacency_Matrix.png', dpi=300, bbox_inches='tight')
+        plt.close()
+
+        # Distance matrix heatmap
+        plt.figure(figsize=(7, 6))
+        ax = sns.heatmap(dij, cmap='RdBu_r', center=0, cbar=True)
+        ax.set_title('Distance Matrix', fontsize=14)
+        ax.tick_params(axis='both', which='major', labelsize=10)
+        num_labels = 10  # Number of labels you want to show
+        ax.set_xticks(np.linspace(0, dij.shape[1] - 1, num_labels))
+        ax.set_yticks(np.linspace(0, dij.shape[0] - 1, num_labels))
+        ax.set_xticklabels(np.linspace(0, dij.shape[1] - 1, num_labels, dtype=int))
+        ax.set_yticklabels(np.linspace(0, dij.shape[0] - 1, num_labels, dtype=int))
+        plt.savefig(f'{plot_dir}/{matrix_name}_Distance_Matrix.png', dpi=300, bbox_inches='tight')
+        plt.close()
+
+        # 'Topological fingerprint' heatmap
+        # Convert to DataFrame for correlation analysis
+        metrics_df = pd.DataFrame({
             'degree': degree,
-            'total_edge_length': total_edge_length,
             'clustering': clustering,
             'betweenness': betweenness,
+            'total_edge_length': total_edge_length,
             'efficiency': efficiency,
-            'matching': matching
-        }
+            'matching_index': np.mean(matching_matrix, axis=1)
+        })
 
-        # Append results to the entry for this matrix
-        if isinstance(preprocessed_data[i], tuple):  # Convert old structure to new
-            preprocessed_data[i] = {
-                'matrix_name': preprocessed_data[i][0],
-                'species': preprocessed_data[i][1],
-                'day_number': preprocessed_data[i][2],
-                'adjM': preprocessed_data[i][3],
-                'dij': preprocessed_data[i][4],
-                'densities': [density_results]
-            }
-        else:
-            preprocessed_data[i]['densities'].append(density_results)
+        # Compute mean matching index per node
+        metrics_df['matching_index'] = np.mean(matching_matrix, axis=1)
 
-print("Connectivity metrics computed.")
+        # Compute correlation matrix
+        correlation_matrix = metrics_df.corr()
 
+        # Define better-formatted labels
+        formatted_labels = [
+            'Degree', 'Clustering',  'Betweenness', 'Total Edge Length', 'Efficiency', 'Matching Index'
+        ]
 
-# %% Save metrics --------------------------------------------------
-chimpanzee_metrics_df.to_csv("er05/Organoid project scripts/Output/chimpanzee_metrics_summary.csv", index=False)
-human_metrics_df.to_csv("er05/Organoid project scripts/Output/human_metrics_summary.csv", index=False)
+        # Plot correlation heatmap
+        plt.figure(figsize=(8, 6))
+        ax = sns.heatmap(correlation_matrix, cmap='RdBu_r', xticklabels=formatted_labels, yticklabels=formatted_labels, center=0, cbar=True)
+        ax.set_title('Topological Fingerprint Heatmap', fontsize=14)
+        ax.tick_params(axis='both', which='major', labelsize=10)
+        plt.savefig(f'{plot_dir}/{matrix_name}_Topological_Fingerprint.png', dpi=300, bbox_inches='tight')
+        plt.close()
 
-print("Chimpanzee Metrics DataFrame:")
-print(chimpanzee_metrics_df)
-
-print("Human Metrics DataFrame:")
-print(human_metrics_df)
-
-
-# %% Save Preprocessed Data --------------------------------------------------
-# Set working directory
-os.chdir("/imaging/astle")
-
-# Define the path to save the preprocessed data
-preprocessed_data_path = "er05/Organoid project scripts/Output/preprocessed_data.pkl"
-
-with open(preprocessed_data_path, 'wb') as f:
-    pickle.dump(preprocessed_data, f)
-print("Preprocessed data saved to file.")
-
-
-# %% Re-Load Preprocessed Data --------------------------------------------------
-# Set working directory
-os.chdir("/imaging/astle")
-
-# Define the path to load the preprocessed data
-preprocessed_data_path = "er05/Organoid project scripts/Output/preprocessed_data.pkl"
-
-# Check if the file exists and is not empty
-if os.path.exists(preprocessed_data_path) and os.path.getsize(preprocessed_data_path) > 0:
-    try:
-        # Open the file in read-binary mode and load the data
-        with open(preprocessed_data_path, 'rb') as f:
-            preprocessed_data = pickle.load(f)
-        print("Preprocessed data loaded successfully.")
-    except (EOFError, pickle.UnpicklingError) as e:
-        print(f"Error loading preprocessed data: {e}")
-else:
-    print(f"File {preprocessed_data_path} does not exist or is empty.")
-
-# Load metrics DataFrames
-chimpanzee_metrics_df = pd.read_csv("er05/Organoid project scripts/Output/chimpanzee_metrics_summary.csv")
-human_metrics_df = pd.read_csv("er05/Organoid project scripts/Output/human_metrics_summary.csv")
-
-# Check if the Dataframes exist and are not empty
-if not chimpanzee_metrics_df.empty:
-    print("Metrics Dataframes loaded successfully.")
-
-
-# %% Generate visualisations --------------------------------------------------
-# Process data for visualisations *across thresholds* ----------
-# Define variables for visualisations
-for entry in preprocessed_data:
-    matrix_name = entry['matrix_name']
-    species = entry['species']
-    day_number = entry['day_number']
-    dij = entry['dij']
-    
-    # Define the timepoint based on the day number
-    if day_number in ["Day 95", "Day 96"]:
-        timepoint = "t1"
-    elif day_number == "Day 153":
-        timepoint = "t2"
-    elif day_number in ["Day 184", "Day 185"]:
-        timepoint = "t3"
-    else:
-        timepoint = "Unknown Timepoint"
+def overlaid_metrics_plot(processed_data_idx, output_dir):
+    """Generate and save plots overlaid with information for multiple densities"""
+    matrix_name = processed_data_idx['file_name']
+    species = processed_data_idx['species']
+    timepoint = processed_data_idx['timepoint']
+    dij = processed_data_idx['dij']
 
     # Create output directory
-    output_dir_short = f"er05/Organoid project scripts/Output/{species}"
-    os.makedirs(f"{output_dir_short}/{timepoint}", exist_ok=True)
-
-    # State which matrix is being visualised
-    print(f"Visualising {matrix_name}:")
-    print("- plotting metrics across thresholds")
+    plot_dir = os.path.join(output_dir, species, timepoint)
+    os.makedirs(plot_dir, exist_ok=True)
 
     # Graph metrics visualisations ----------
     # Create a 2x2 panel figure for the histograms
@@ -314,10 +293,9 @@ for entry in preprocessed_data:
     font_size = 12
 
     # Define colours for each density level
-    density_colours = ["#440154", "#B12A90", "#F46D43", "#FDE725"]
+    density_colours = ['#440154', '#B12A90', '#F46D43', '#FDE725']
 
-    # Iterate over density levels and plot each on the same set of axes
-    for idx, density_data in enumerate(entry['densities']):
+    for density_data in processed_data_idx['metrics']:
         density_level = density_data['density_level']
         degree = density_data['degree']
         total_edge_length = density_data['total_edge_length']
@@ -325,22 +303,22 @@ for entry in preprocessed_data:
         betweenness = density_data['betweenness']
 
         # Degree Distribution
-        sns.kdeplot(degree, color=density_colours[idx], ax=axes[0, 0], label=f"{int(density_level * 100)}%", linewidth=3, alpha=0.7)
+        sns.kdeplot(degree, color=density_colours[idx], ax=axes[0, 0], label=f'{int(density_level * 100)}%', linewidth=3, alpha=0.7)
 
         # Total Edge Length Distribution
-        sns.kdeplot(total_edge_length, color=density_colours[idx], ax=axes[0, 1], label=f"{int(density_level * 100)}%", linewidth=3, alpha=0.7)
+        sns.kdeplot(total_edge_length, color=density_colours[idx], ax=axes[0, 1], label=f'{int(density_level * 100)}%', linewidth=3, alpha=0.7)
 
         # Clustering Coefficient Distribution
-        sns.kdeplot(clustering, color=density_colours[idx], ax=axes[1, 0], label=f"{int(density_level * 100)}%", linewidth=3, alpha=0.7)
+        sns.kdeplot(clustering, color=density_colours[idx], ax=axes[1, 0], label=f'{int(density_level * 100)}%', linewidth=3, alpha=0.7)
 
         # Betweenness Centrality Distribution
-        sns.kdeplot(betweenness, color=density_colours[idx], ax=axes[1, 1], label=f"{int(density_level * 100)}%", linewidth=3, alpha=0.7)
+        sns.kdeplot(betweenness, color=density_colours[idx], ax=axes[1, 1], label=f'{int(density_level * 100)}%', linewidth=3, alpha=0.7)
 
     # Set titles
-    axes[0, 0].set_title("Degree", fontsize=font_size)
-    axes[0, 1].set_title("Total Edge Length", fontsize=font_size)
-    axes[1, 0].set_title("Clustering Coefficient", fontsize=font_size)
-    axes[1, 1].set_title("Betweenness Centrality", fontsize=font_size)
+    axes[0, 0].set_title('Degree', fontsize=font_size)
+    axes[0, 1].set_title('Total Edge Length', fontsize=font_size)
+    axes[1, 0].set_title('Clustering Coefficient', fontsize=font_size)
+    axes[1, 1].set_title('Betweenness Centrality', fontsize=font_size)
 
     # Adjust tick label sizes
     for ax in axes.flat:
@@ -351,20 +329,31 @@ for entry in preprocessed_data:
     fig.tight_layout(pad=2.0)
 
     # Save the figure
-    plt.savefig(f"{output_dir_short}/{timepoint}/{matrix_name}_Graph_Metrics.png", dpi=300, bbox_inches="tight")
+    plt.savefig(f'{plot_dir}/{matrix_name}_Graph_Metrics.png', dpi=300, bbox_inches='tight')
     plt.close()
 
-    # "Topological fingerprint" correlation ----------
-    # Define the organoid slices that I want to use as timepoints
-    chosen_slices = ["C_d96_s2_dt10", "C_d153_s7_dt10", "C_d184_s8_dt10"]
-    chosen_density = 0.1
+def fingerprint_correlation_plot(processed_data_idx, output_dir): # read in metrics dataframes
+    """Generate and save plots comparing correlation of topological fingerprint over densities."""
+    # Load chimpanzee metrics dataframe
+    chimpanzee_metrics_df = pd.read_csv(f'{output_dir}/Chimpanzee/chimpanzee_metrics_summary.csv')
 
-    # Create a subset of the DataFrame
+    # Create output directory
+    plot_dir = os.path.join(output_dir, species)
+    os.makedirs(plot_dir, exist_ok=True)
+
+    # 'Topological fingerprint' correlation across densities ----------
+    # In chosen slices, for each density level, compute average means across slices
+    chosen_slices = ['C_d96_s2_dt10', 'C_d153_s7_dt10', 'C_d184_s8_dt10']
+
     chimpanzee_metrics_df_subset = chimpanzee_metrics_df[
-        (chimpanzee_metrics_df['matrix_name'].isin(chosen_slices)) &
-        (chimpanzee_metrics_df['density_level'] == chosen_density)
+        (chimpanzee_metrics_df['file_name'].isin(chosen_slices))
     ]
 
+    # Group by 'density_level' and compute the mean for numeric columns only
+    chimpanzee_metrics_df_subset = chimpanzee_metrics_df_subset.groupby(['density_level']).mean(numeric_only=True).reset_index()
+
+
+    # Select only the metrics of interest
     chimpanzee_metrics_df_subset = chimpanzee_metrics_df_subset[
         ['degree_mean', 'clustering_mean', 'betweenness_mean', 'total_edge_length_mean', 'efficiency_mean', 'matching_mean']
     ]
@@ -372,185 +361,77 @@ for entry in preprocessed_data:
     # Compute correlation matrix
     CS_correlation_matrix = chimpanzee_metrics_df_subset.corr()
 
-    # Plot correlation heatmap
-    plt.figure(figsize=(8, 6))
-    ax = sns.heatmap(CS_correlation_matrix, cmap="RdBu_r", xticklabels=formatted_labels, yticklabels=formatted_labels, center=0, cbar=True)
-    ax.set_title("Topological Fingerprint Correlation Across Time", fontsize=14)
-    ax.tick_params(axis='both', which='major', labelsize=10)
-    plt.savefig(f"{output_dir_short}/Topological_Fingerprint_Correlation_s2_s7_s10_dt10.png", dpi=300, bbox_inches="tight")
-    plt.close()        
-
-    # "Topological fingerprint" coefficient of variation ----------
-    # Define the columns of interest
-    metrics_columns = ['degree_mean', 'clustering_mean', 'betweenness_mean', 'total_edge_length_mean', 'efficiency_mean', 'matching_mean']
-
-    # Function to calculate the coefficient of variation
-    def calculate_cv(series):
-        return series.std() / series.mean()
-
-    # Group by matrix_name and calculate the CV for each metric
-    cv_results = chimpanzee_metrics_df.groupby('matrix_name')[metrics_columns].apply(lambda x: x.apply(calculate_cv))
-
-    # Add back day numbers
-    day_numbers = chimpanzee_metrics_df[['matrix_name', 'day_number']].drop_duplicates()
-    cv_results_with_day = pd.merge(cv_results, day_numbers, on='matrix_name', how='left')
-
-    # Plot the coefficient of variation for each metric as a boxplot (overlaid with dots)
-    # Melt the DataFrame to long format for easier plotting with seaborn
-    cv_results_melted = cv_results_with_day.melt(id_vars=['matrix_name', 'day_number'], var_name='Metric', value_name='Coefficient of Variation')
-
     # Define better-formatted labels
     formatted_labels = [
-        "Degree", "Clustering",  "Betweenness", "Total Edge Length", "Efficiency", "Matching Index"
+        'Degree', 'Clustering',  'Betweenness', 'Total Edge Length', 'Efficiency', 'Matching Index'
     ]
 
-    # Define timepoints
-    timepoints = {
-        't1': ["Day 95", "Day 96"],
-        't2': ["Day 153"],
-        't3': ["Day 184", "Day 185"]
-    }
-
-    # Define colors for each timepoint
-    timepoint_colors = {
-        't1': sns.color_palette("magma", as_cmap=True)(0.2),
-        't2': sns.color_palette("magma", as_cmap=True)(0.5),
-        't3': sns.color_palette("magma", as_cmap=True)(0.8)
-    }
-
-    # Plot the data for each timepoint on the same axis
-    plt.figure(figsize=(12, 8))
-    for tp, days in timepoints.items():
-        tp_data = cv_results_melted[cv_results_melted['day_number'].isin(days)]
-                
-        if not tp_data.empty:
-            sns.stripplot(x='Metric', y='Coefficient of Variation', data=tp_data, color=timepoint_colors[tp], dodge=True, jitter=True, ax=plt.gca(), size=8, alpha=0.6, label=tp.upper())
-
-    # Set plot title and labels
-    plt.title('Coefficient of Variation for Different Metrics', fontsize=20)
-    plt.xlabel('Metric', fontsize=18)
-    plt.ylabel('Coefficient of Variation', fontsize=18)
-    plt.xticks(ticks=range(len(formatted_labels)), labels=formatted_labels)
-    plt.yticks(fontsize=16)
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
-    plt.legend(title='Timepoint', bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=14, title_fontsize=16)
-    plt.tight_layout()
-
-    # Remove duplicate legend entries
-    handles, labels = plt.gca().get_legend_handles_labels()
-    by_label = dict(zip(labels, handles))
-    plt.legend(by_label.values(), by_label.keys(), title='Timepoint', bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=14, title_fontsize=16)
-
-    # Save and close
-    plt.savefig(f"{output_dir_short}/Metrics_CVs.png", dpi=300, bbox_inches="tight")
+    # Plot correlation heatmap
+    plt.figure(figsize=(8, 6))
+    ax = sns.heatmap(CS_correlation_matrix, cmap='RdBu_r', xticklabels=formatted_labels, yticklabels=formatted_labels, center=0, cbar=True)
+    ax.set_title('Topological Fingerprint Correlation Across Time', fontsize=14)
+    ax.tick_params(axis='both', which='major', labelsize=10)
+    plt.savefig(f'{plot_dir}/Topological_Fingerprint_Correlation_s2_s7_s10_dt10.png', dpi=300, bbox_inches='tight')
     plt.close()
 
-    # Process data for visualisations *for each threshold* ----------
-    for density_data in entry['densities']:
-        density_level = density_data['density_level']
-        adjM_thresholded = density_data['adjM_thresholded']
-        degree = density_data['degree']
-        total_edge_length = density_data['total_edge_length']
-        clustering = density_data['clustering']
-        betweenness = density_data['betweenness']
-        efficiency = density_data['efficiency']
-        matching = density_data['matching']
 
-        # Create output directory
-        output_dir = f"er05/Organoid project scripts/Output/{species}/{timepoint}/{int(density_level * 100)}%"
-        os.makedirs(output_dir, exist_ok=True)
+# %% Main Script --------------------------------------------------
+# Define working directory
+os.chdir('/imaging/astle')
 
-        # State which matrix is being visualised
-        print(f"- plotting heatmaps at {int(density_level * 100)}% threshold")
-        
-        # Adjacency matrix heatmap ----------
-        plt.figure(figsize=(7, 6))
-        ax = sns.heatmap(adjM_thresholded, cmap="RdBu_r", center=0, cbar=True)
-        ax.set_title("Thresholded Adjacency Matrix", fontsize=14)
-        ax.tick_params(axis='both', which='major', labelsize=10)
-        num_labels = 10  # Number of labels you want to show
-        ax.set_xticks(np.linspace(0, adjM_thresholded.shape[1] - 1, num_labels))
-        ax.set_yticks(np.linspace(0, adjM_thresholded.shape[0] - 1, num_labels))
-        ax.set_xticklabels(np.linspace(0, adjM_thresholded.shape[1] - 1, num_labels, dtype=int))
-        ax.set_yticklabels(np.linspace(0, adjM_thresholded.shape[0] - 1, num_labels, dtype=int))
-        plt.savefig(f"{output_dir}/{matrix_name}_Adjacency_Matrix.png", dpi=300, bbox_inches="tight")
-        plt.close()
+# Set output directories
+matrix_dir = 'kr01/organoid/OrgNets'
+output_dir = 'er05/Organoid project scripts/Output'
+os.makedirs(output_dir, exist_ok=True)
 
-        # Distance matrix heatmap ----------
-        plt.figure(figsize=(7, 6))
-        ax = sns.heatmap(dij, cmap="RdBu_r", center=0, cbar=True)
-        ax.set_title("Distance Matrix", fontsize=14)
-        ax.tick_params(axis='both', which='major', labelsize=10)
-        num_labels = 10  # Number of labels you want to show
-        ax.set_xticks(np.linspace(0, dij.shape[1] - 1, num_labels))
-        ax.set_yticks(np.linspace(0, dij.shape[0] - 1, num_labels))
-        ax.set_xticklabels(np.linspace(0, dij.shape[1] - 1, num_labels, dtype=int))
-        ax.set_yticklabels(np.linspace(0, dij.shape[0] - 1, num_labels, dtype=int))
-        plt.savefig(f"{output_dir}/{matrix_name}_Distance_Matrix.png", dpi=300, bbox_inches="tight")
-        plt.close()
+# Create empty dataframes and lists
+chimpanzee_metrics_df = pd.DataFrame()
+human_metrics_df = pd.DataFrame()
+processed_data = []
 
-        # "Topological fingerprint" heatmap ----------
-        # Convert to DataFrame for correlation analysis
-        metrics_df = pd.DataFrame({
-            'degree': degree,
-            'clustering': clustering,
-            'betweenness': betweenness,
-            'total_edge_length': total_edge_length,
-            'efficiency': efficiency,
-            'matching_index': np.mean(matching, axis=1)
-        })
+# Define density levels
+density_levels = [0.05, 0.1, 0.2, 1]
 
-        # Compute mean matching index per node
-        metrics_df['matching_index'] = np.mean(matching, axis=1)
+# Load data
+matrix_files = load_files(matrix_dir=matrix_dir)
+print(f'{len(matrix_files)} organoid file(s) loaded.')
 
-        # Compute correlation matrix
-        correlation_matrix = metrics_df.corr()
+# Sort one at a time
+for idx, file_path in enumerate(matrix_files):
+    # Process data
+    file_name, adjM, dij = process_data(file_path=file_path)
 
-        # Define better-formatted labels
-        formatted_labels = [
-            "Degree", "Clustering",  "Betweenness", "Total Edge Length", "Efficiency", "Matching Index"
-        ]
+    # Sort data
+    species, day_number, timepoint = sort_data(file_name)
 
-        # Plot correlation heatmap
-        plt.figure(figsize=(8, 6))
-        ax = sns.heatmap(correlation_matrix, cmap="RdBu_r", xticklabels=formatted_labels, yticklabels=formatted_labels, center=0, cbar=True)
-        ax.set_title("Topological Fingerprint Heatmap", fontsize=14)
-        ax.tick_params(axis='both', which='major', labelsize=10)
-        plt.savefig(f"{output_dir}/{matrix_name}_Topological_Fingerprint.png", dpi=300, bbox_inches="tight")
-        plt.close()
+    print(f'Processing {file_name} ({idx + 1}/{len(matrix_files)}):')
 
-print("All visualisations saved.")
+    # Compute metrics
+    metrics_list, chimpanzee_metrics_df, human_metrics_df = compute_metrics(file_name=file_name, species=species, day_number=day_number, adjM=adjM, density_levels=density_levels, chimpanzee_metrics_df=chimpanzee_metrics_df, human_metrics_df=human_metrics_df)
+
+    # Update processed data
+    processed_data.append({'file_name': file_name, 'species': species, 'timepoint': timepoint, 'adjM': adjM, 'dij': dij, 'metrics': metrics_list})
+    print('- metrics computed')
+
+    # Save after each iteration
+    os.makedirs(f'{output_dir}/Chimpanzee', exist_ok=True)
+    os.makedirs(f'{output_dir}/Human', exist_ok=True)
+    pickle_dir = f'{output_dir}/processed_data.pkl'
+    save_data(output_dir=output_dir, pickle_dir=pickle_dir, processed_data=processed_data, chimpanzee_metrics_df=chimpanzee_metrics_df, human_metrics_df=human_metrics_df)
+    print('- data saved')
+
+    # Load data
+    processed_data = load_data(pickle_dir=pickle_dir)
+    print('- data loaded')
+
+    # Plot
+    processed_data_idx = processed_data[idx]
+    individual_plot(processed_data_idx=processed_data_idx, output_dir=output_dir)
+    overlaid_metrics_plot(processed_data_idx=processed_data_idx, output_dir=output_dir)
+    fingerprint_correlation_plot(processed_data_idx=processed_data_idx, output_dir=output_dir)
+    print('- plots created')
+
+print('Processing complete. Metrics saved incrementally.')
 
 
-# %% Extra script to create dij without loaded data
-"""
-densities_to_test = [0.05, 0.1, 0.2, 1]
-
-for key in preprocessed_data:
-    for density_level in densities_to_test:
-        matrix_name = key[0]
-        species = key[1]
-        day_number = key[2]
-        adjM = key[3]
-        dij = key[4]
-
-        output_dir = f"er05/Organoid project scripts/Output/{species}/{int(density_level * 100)}%/{day_number}/Graphs"
-
-        
-        print(f"Graphing dij for {matrix_name}...")
-
-        # Distance matrix heatmap
-        plt.figure(figsize=(7, 6))
-        ax = sns.heatmap(dij, cmap="RdBu_r", center=0, cbar=True)
-        ax.set_title("Distance Matrix", fontsize=14)
-        ax.tick_params(axis='both', which='major', labelsize=10)
-        num_labels = 10  # Number of labels you want to show
-        ax.set_xticks(np.linspace(0, dij.shape[1] - 1, num_labels))
-        ax.set_yticks(np.linspace(0, dij.shape[0] - 1, num_labels))
-        ax.set_xticklabels(np.linspace(0, dij.shape[1] - 1, num_labels, dtype=int))
-        ax.set_yticklabels(np.linspace(0, dij.shape[0] - 1, num_labels, dtype=int))
-        plt.savefig(f"{output_dir}/{matrix_name}_Distance_Matrix.png", dpi=300, bbox_inches="tight")
-        plt.close()
-
-        print(f"Saved dij to {output_dir}")
-"""
+# %%
