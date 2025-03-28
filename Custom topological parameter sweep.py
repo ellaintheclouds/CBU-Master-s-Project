@@ -9,10 +9,12 @@ import bct # brain Connectivity Toolbox (graph-theoretic analysis)
 from scipy.spatial.distance import cdist # compute pairwise Euclidean distances
 import matplotlib.pyplot as plt
 import numpy as np
+import gnm
+import seaborn as sns  # Data visualisation
 
 
 # %% Import GNM functions --------------------------------------------------
-from gnm import fitting, evaluation
+from gnm import fitting, evaluation, BinaryGenerativeParameters, GenerativeNetworkModel
 from gnm.generative_rules import MatchingIndex
 
 
@@ -239,3 +241,154 @@ print(f'Optimal results saved.')
 pd.DataFrame(t1_results).to_csv('er05/Organoid project scripts/Output/Chimpanzee/Parameter sweeps/custom_parameter_sweep_all.csv', index=False)
 print(f'All results saved.')
 
+# %% Model t0-t1 ------------------------------------
+# Set the parameters for the t0-t1 model
+# Use the optimal parameters from the parameter sweep
+t0_t1_binary_parameters = gnm.BinaryGenerativeParameters(
+    eta=t1_optimal_results[0]['eta'],
+    gamma=t1_optimal_results[0]['gamma'],
+    lambdah=lambdah_value,
+    distance_relationship_type='powerlaw',
+    preferential_relationship_type='powerlaw',
+    heterochronicity_relationship_type='powerlaw',
+    generative_rule=MatchingIndex(divisor='mean'),
+    num_iterations=timepoint_data_list[0]['num_connections'],
+    prob_offset=1e-06,
+    binary_updates_per_iteration=1
+    )
+
+# Define the model
+gnm.GenerativeNetworkModel(
+    binary_parameters=t0_t1_binary_parameters,
+    num_simulations=num_simulations,
+    num_nodes=timepoint_data_list[0]['num_nodes'],
+    distance_matrix=timepoint_data_list[0]['distance_matrix_tensor'],
+    )
+
+# Run the model
+t0_t1_model = model.run_model()
+
+# Averaging across runs ----------
+# Initialize a list to store the averaged matrices
+averaged_matrices = []
+
+# Iterate through each element in t0_t1_model[0]
+for element in t0_t1_model[1]:
+    # Convert the element to a NumPy array if it's a tensor
+    matrices = element.numpy()  # Assuming each element contains multiple matrices
+
+    # Compute the element-wise mean across all matrices
+    avg_matrix = matrices.mean(axis=0)  # Average along the first axis
+
+    # Append the averaged matrix to the list
+    averaged_matrices.append(avg_matrix)
+
+# Save the averaged matrices as a NumPy array or process further
+averaged_matrices = np.array(averaged_matrices)
+
+# Example: Save the averaged matrices to a file ########## add this later
+#np.save('averaged_matrices.npy', averaged_matrices)
+
+
+# %% Analysing simulated Network --------------------------------------------------
+# Processing ----------
+# Extract the adjM
+t1_sim_adjM = averaged_matrices[-1]
+
+# Compute graph metrics
+degree = np.sum(t1_sim_adjM != 0, axis=0)
+
+total_edge_length = np.sum(t1_sim_adjM, axis=0)
+
+clustering = bct.clustering_coef_bu(t1_sim_adjM)
+
+betweenness = bct.betweenness_wei(1 / (t1_sim_adjM + np.finfo(float).eps))
+
+efficiency = bct.efficiency_wei(t1_sim_adjM, local=True)
+
+N = t1_sim_adjM.shape[0]
+matching_matrix = np.zeros((N, N))
+for i in range(N):
+    for j in range(N):
+        if i != j:
+            min_weights = np.minimum(t1_sim_adjM[i, :], t1_sim_adjM[j, :])
+            max_weights = np.maximum(t1_sim_adjM[i, :], t1_sim_adjM[j, :])
+            if np.sum(max_weights) > 0:  # Avoid division by zero
+                matching_matrix[i, j] = np.sum(min_weights) / np.sum(max_weights)
+
+# Plot adjM ----------
+plt.figure(figsize=(7, 6))
+ax = sns.heatmap(t1_sim_adjM, cmap='RdBu_r', center=0, cbar=True)
+ax.set_title('Thresholded Adjacency Matrix', fontsize=14)
+ax.tick_params(axis='both', which='major', labelsize=10)
+num_labels = 10
+ax.set_xticks(np.linspace(0, t1_sim_adjM.shape[1] - 1, num_labels))
+ax.set_yticks(np.linspace(0, t1_sim_adjM.shape[0] - 1, num_labels))
+ax.set_xticklabels(np.linspace(0, t1_sim_adjM.shape[1] - 1, num_labels, dtype=int))
+ax.set_yticklabels(np.linspace(0, t1_sim_adjM.shape[0] - 1, num_labels, dtype=int))
+plt.show()
+
+# Graph metrics visualisations ----------
+# Create a 2x2 panel figure for the histograms
+fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+
+# Increase font size
+font_size = 12
+
+# Degree Distribution
+sns.kdeplot(degree, color='#440154', ax=axes[0, 0], linewidth=3, alpha=0.7)
+
+# Total Edge Length Distribution
+sns.kdeplot(total_edge_length, color='#440154', ax=axes[0, 1], linewidth=3, alpha=0.7)
+
+# Clustering Coefficient Distribution
+sns.kdeplot(clustering, color='#440154', ax=axes[1, 0], linewidth=3, alpha=0.7)
+
+# Betweenness Centrality Distribution
+sns.kdeplot(betweenness, color='#440154', ax=axes[1, 1], linewidth=3, alpha=0.7)
+
+# Set titles
+axes[0, 0].set_title('Degree', fontsize=font_size)
+axes[0, 1].set_title('Total Edge Length', fontsize=font_size)
+axes[1, 0].set_title('Clustering Coefficient', fontsize=font_size)
+axes[1, 1].set_title('Betweenness Centrality', fontsize=font_size)
+
+# Adjust tick label sizes
+for ax in axes.flat:
+    ax.tick_params(axis='both', which='major', labelsize=font_size)
+
+# Adjust spacing between subplots
+fig.tight_layout(pad=2.0)
+plt.show()
+
+# 'Topological fingerprint' heatmap ----------
+# Convert to DataFrame for correlation analysis
+metrics_df = pd.DataFrame({
+    'degree': degree,
+    'clustering': clustering,
+    'betweenness': betweenness,
+    'total_edge_length': total_edge_length,
+    'efficiency': efficiency,
+    'matching_index': np.mean(matching_matrix, axis=1)
+})
+
+# Compute mean matching index per node
+metrics_df['matching_index'] = np.mean(matching_matrix, axis=1)
+
+# Compute correlation matrix
+correlation_matrix = metrics_df.corr()
+
+# Define better-formatted labels
+formatted_labels = [
+    'Degree', 'Clustering',  'Betweenness', 'Total Edge Length', 'Efficiency', 'Matching Index'
+]
+
+# Plot correlation heatmap
+plt.figure(figsize=(8, 6))
+ax = sns.heatmap(correlation_matrix, cmap='RdBu_r', xticklabels=formatted_labels, yticklabels=formatted_labels, center=0, cbar=True)
+ax.set_title('Topological Fingerprint Heatmap', fontsize=14)
+ax.tick_params(axis='both', which='major', labelsize=10)
+plt.show()
+
+
+# %%
