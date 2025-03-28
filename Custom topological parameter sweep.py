@@ -1,21 +1,16 @@
-# %% Import packages --------------------------------------------------
-import torch # for tensor operations
-import time # for timing the parameter sweep
-import scipy.io # for loading .mat files (MATLAB data)
-import numpy as np # for numerical operations (e.g. matrix manipulation)
-import pandas as pd # for saving results
-import os # for file operations
-import bct # brain Connectivity Toolbox (graph-theoretic analysis)
-from scipy.spatial.distance import cdist # compute pairwise Euclidean distances
-import matplotlib.pyplot as plt
-import numpy as np
-import gnm
-import seaborn as sns  # Data visualisation
-
-
-# %% Import GNM functions --------------------------------------------------
+# %% Import Packages and Functions --------------------------------------------------
+import bct # brain connectivity toolbox
+import gnm # for generative network modeling
 from gnm import fitting, evaluation, BinaryGenerativeParameters, GenerativeNetworkModel
 from gnm.generative_rules import MatchingIndex
+import matplotlib.pyplot as plt # for plotting
+import numpy as np # for numerical operations
+import os # for file operations
+import scipy.io # for loading .mat files
+import seaborn as sns # for enhanced plotting
+import time # for timing the parameter sweep
+import torch # for tensor operations
+from scipy.spatial.distance import cdist # compute pairwise Euclidean distances
 
 
 # %% Load and Process Data --------------------------------------------------
