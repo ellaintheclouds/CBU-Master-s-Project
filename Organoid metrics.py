@@ -279,7 +279,6 @@ def overlaid_metrics_plot(processed_data_idx, output_dir):
     matrix_name = processed_data_idx['file_name']
     species = processed_data_idx['species']
     timepoint = processed_data_idx['timepoint']
-    dij = processed_data_idx['dij']
 
     # Create output directory
     plot_dir = os.path.join(output_dir, species, timepoint)
@@ -287,43 +286,57 @@ def overlaid_metrics_plot(processed_data_idx, output_dir):
 
     # Graph metrics visualisations ----------
     # Create a 2x2 panel figure for the histograms
-    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+    fig, axes = plt.subplots(2, 2, figsize=(10, 6))
     
     # Increase font size
-    font_size = 12
+    font_size = 14
+    tick_size = 12
 
     # Define colours for each density level
-    density_colours = ['#440154', '#B12A90', '#F46D43', '#FDE725']
+    density_colours = {0.05: '#440154', 0.1: '#B12A90', 0.2: '#F46D43'}
 
     for density_data in processed_data_idx['metrics']:
         density_level = density_data['density_level']
+        if density_level not in density_colours:  # Skip densities not in the specified list
+            continue
+
         degree = density_data['degree']
         total_edge_length = density_data['total_edge_length']
         clustering = density_data['clustering']
         betweenness = density_data['betweenness']
 
         # Degree Distribution
-        sns.kdeplot(degree, color=density_colours[idx], ax=axes[0, 0], label=f'{int(density_level * 100)}%', linewidth=3, alpha=0.7)
+        sns.kdeplot(degree, color=density_colours[density_level], ax=axes[0, 0], label=f'{int(density_level * 100)}%', linewidth=3, alpha=0.7)
 
         # Total Edge Length Distribution
-        sns.kdeplot(total_edge_length, color=density_colours[idx], ax=axes[0, 1], label=f'{int(density_level * 100)}%', linewidth=3, alpha=0.7)
+        sns.kdeplot(total_edge_length, color=density_colours[density_level], ax=axes[0, 1], label=f'{int(density_level * 100)}%', linewidth=3, alpha=0.7)
 
         # Clustering Coefficient Distribution
-        sns.kdeplot(clustering, color=density_colours[idx], ax=axes[1, 0], label=f'{int(density_level * 100)}%', linewidth=3, alpha=0.7)
+        sns.kdeplot(clustering, color=density_colours[density_level], ax=axes[1, 0], label=f'{int(density_level * 100)}%', linewidth=3, alpha=0.7)
 
         # Betweenness Centrality Distribution
-        sns.kdeplot(betweenness, color=density_colours[idx], ax=axes[1, 1], label=f'{int(density_level * 100)}%', linewidth=3, alpha=0.7)
+        sns.kdeplot(betweenness, color=density_colours[density_level], ax=axes[1, 1], label=f'{int(density_level * 100)}%', linewidth=3, alpha=0.7)
 
     # Set titles
     axes[0, 0].set_title('Degree', fontsize=font_size)
-    axes[0, 1].set_title('Total Edge Length', fontsize=font_size)
-    axes[1, 0].set_title('Clustering Coefficient', fontsize=font_size)
-    axes[1, 1].set_title('Betweenness Centrality', fontsize=font_size)
+    axes[0, 1].set_title('Edge Length', fontsize=font_size)
+    axes[1, 0].set_title('Clustering', fontsize=font_size)
+    axes[1, 1].set_title('Betweenness', fontsize=font_size)
 
-    # Adjust tick label sizes
+    # Customize axes
     for ax in axes.flat:
-        ax.tick_params(axis='both', which='major', labelsize=font_size)
-        ax.legend()  # Add legend to distinguish density levels
+        ax.tick_params(axis='both', which='major', labelsize=tick_size)  # Adjust tick size
+        ax.yaxis.set_major_locator(plt.MaxNLocator(4))  # Limit to 4 y-axis labels
+        ax.xaxis.set_major_locator(plt.MaxNLocator(4))  # Limit to 4 x-axis labels
+        ax.spines['right'].set_visible(False)  # Remove right boundary
+        ax.spines['top'].set_visible(False)    # Remove top boundary
+        ax.spines['left'].set_color('lightgrey')  # Set left boundary to light grey
+        ax.spines['bottom'].set_color('lightgrey')  # Set bottom boundary to light grey
+        ax.spines['left'].set_linewidth(1)
+        ax.spines['bottom'].set_linewidth(1)
+
+    # Add legend only to the top-right plot
+    axes[0, 1].legend(fontsize=tick_size, title='Density', title_fontsize=font_size, loc='upper right')
 
     # Adjust spacing between subplots
     fig.tight_layout(pad=2.0)
@@ -392,9 +405,15 @@ processed_data = []
 # Define density levels
 density_levels = [0.05, 0.1, 0.2, 1]
 
+# Load existing processed data if available
+pickle_dir = f'{output_dir}/processed_data.pkl'
+if os.path.exists(pickle_dir):
+    processed_data = load_data(pickle_dir=pickle_dir)
+    print(f'Loaded existing processed data with {len(processed_data)} entries.')
+
 # Load data
 matrix_files = load_files(matrix_dir=matrix_dir)
-print(f'{len(matrix_files)} organoid file(s) loaded.')
+print(f'{len(matrix_files)} organoid file(s) loaded: {matrix_files}')
 
 # Sort one at a time
 for idx, file_path in enumerate(matrix_files):
@@ -406,32 +425,47 @@ for idx, file_path in enumerate(matrix_files):
 
     print(f'Processing {file_name} ({idx + 1}/{len(matrix_files)}):')
 
-    # Compute metrics
-    metrics_list, chimpanzee_metrics_df, human_metrics_df = compute_metrics(file_name=file_name, species=species, day_number=day_number, adjM=adjM, density_levels=density_levels, chimpanzee_metrics_df=chimpanzee_metrics_df, human_metrics_df=human_metrics_df)
+    # Check if this organoid's data is already processed
+    existing_entry = next((entry for entry in processed_data if entry['file_name'] == file_name), None)
 
-    # Update processed data
-    processed_data.append({'file_name': file_name, 'species': species, 'timepoint': timepoint, 'adjM': adjM, 'dij': dij, 'metrics': metrics_list})
-    print('- metrics computed')
+    if existing_entry:
+        print(f'- Data for {file_name} already processed. Using loaded data.')
+        metrics_list = existing_entry['metrics']
+    else:
+        # Compute metrics
+        metrics_list, chimpanzee_metrics_df, human_metrics_df = compute_metrics(
+            file_name=file_name,
+            species=species,
+            day_number=day_number,
+            adjM=adjM,
+            density_levels=density_levels,
+            chimpanzee_metrics_df=chimpanzee_metrics_df,
+            human_metrics_df=human_metrics_df
+        )
+        print('- Metrics computed')
 
-    # Save after each iteration
-    os.makedirs(f'{output_dir}/Chimpanzee', exist_ok=True)
-    os.makedirs(f'{output_dir}/Human', exist_ok=True)
-    pickle_dir = f'{output_dir}/processed_data.pkl'
-    save_data(output_dir=output_dir, pickle_dir=pickle_dir, processed_data=processed_data, chimpanzee_metrics_df=chimpanzee_metrics_df, human_metrics_df=human_metrics_df)
-    print('- data saved')
+        # Append new data to processed_data
+        processed_data.append({
+            'file_name': file_name,
+            'species': species,
+            'timepoint': timepoint,
+            'adjM': adjM,
+            'dij': dij,
+            'metrics': metrics_list
+        })
 
-    # Load data
-    processed_data = load_data(pickle_dir=pickle_dir)
-    print('- data loaded')
+        # Save after each new computation
+        save_data(output_dir=output_dir, pickle_dir=pickle_dir, processed_data=processed_data,
+                  chimpanzee_metrics_df=chimpanzee_metrics_df, human_metrics_df=human_metrics_df)
+        print('- Data saved')
 
     # Plot
-    processed_data_idx = processed_data[idx]
-    individual_plot(processed_data_idx=processed_data_idx, output_dir=output_dir)
+    processed_data_idx = next(entry for entry in processed_data if entry['file_name'] == file_name)
+    #individual_plot(processed_data_idx=processed_data_idx, output_dir=output_dir)
     overlaid_metrics_plot(processed_data_idx=processed_data_idx, output_dir=output_dir)
-    fingerprint_correlation_plot(processed_data_idx=processed_data_idx, output_dir=output_dir)
-    print('- plots created')
+    #fingerprint_correlation_plot(processed_data_idx=processed_data_idx, output_dir=output_dir)
+    print('- Plots created')
 
 print('Processing complete. Metrics saved incrementally.')
-
 
 # %%
