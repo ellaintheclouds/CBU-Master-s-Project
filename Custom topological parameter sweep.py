@@ -1,18 +1,23 @@
 # %% Import Packages and Functions --------------------------------------------------
-import bct # brain connectivity toolbox
-import gnm # for generative network modeling
+# Network Neuroscience
+import bct
+import gnm
 from gnm import fitting, evaluation, BinaryGenerativeParameters, GenerativeNetworkModel
 from gnm.generative_rules import MatchingIndex
-import matplotlib.pyplot as plt # for plotting
-import numpy as np # for numerical operations
-import os # for file operations
-import pandas as pd # for data manipulation and analysis
-import pickle  # Save/load processed data
-import scipy.io # for loading .mat files
-import seaborn as sns # for enhanced plotting
-import time # for timing the parameter sweep
-import torch # for tensor operations
-from scipy.spatial.distance import cdist # compute pairwise Euclidean distances
+
+# Operations
+import numpy as np
+import os
+import pickle
+import scipy.io
+import time
+import torch
+from scipy.spatial.distance import cdist
+
+# Plotting
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
 
 
 # %% Define Functions --------------------------------------------------
@@ -120,14 +125,13 @@ def parameter_sweep(eta_values, gamma_values, lambdah_value, num_simulations, se
 
 def plot_energy_landscape(results, title='Energy Landscape', output_filepath=None):
     """
-    Plots a 2D energy landscape from a list of dicts with 'eta', 'gamma', and 'mean_energy' keys.
+    Plots the energy landscape from the parameter sweep results.
 
     Parameters:
-        results (list of dict): Output from parameter sweep with 'eta', 'gamma', and 'mean_energy'
-        title (str): Title of the plot
-        output_filepath (str): Optional path to save the figure
+        results (pd.DataFrame): DataFrame containing the energy landscape data.
+        title (str): Title of the plot.
+        output_filepath (str): Filepath to save the plot. If None, the plot is shown.
     """
-
     # Convert to DataFrame
     df = pd.DataFrame(results)
 
@@ -136,7 +140,7 @@ def plot_energy_landscape(results, title='Energy Landscape', output_filepath=Non
 
     # Reverse the gamma axis (index)
     energy_grid = energy_grid.sort_index(ascending=False)
-
+    
     # Create the plot
     plt.figure(figsize=(8, 6))
     ax = sns.heatmap(
@@ -156,9 +160,9 @@ def plot_energy_landscape(results, title='Energy Landscape', output_filepath=Non
 
     # Explicitly set tick positions to align with the edges
     ax.set_xticks([0.5, len(energy_grid.columns) - 0.5])  # Tick positions at the edges
-    ax.set_xticklabels([f'{energy_grid.columns[0]:.2f}', f'{energy_grid.columns[-1]:.2f}'], fontsize=10)
+    ax.set_xticklabels([f"{energy_grid.columns[0]:.2f}", f"{energy_grid.columns[-1]:.2f}"], fontsize=10)
     ax.set_yticks([0.5, len(energy_grid.index) - 0.5])  # Tick positions at the edges
-    ax.set_yticklabels([f'{energy_grid.index[0]:.2f}', f'{energy_grid.index[-1]:.2f}'], fontsize=10)
+    ax.set_yticklabels([f"{energy_grid.index[0]:.2f}", f"{energy_grid.index[-1]:.2f}"], fontsize=10)
 
     # Adjust axis limits to ensure ticks are flush with the edges
     ax.set_xlim(0, len(energy_grid.columns))  # Align x-axis ticks with edges
@@ -166,7 +170,7 @@ def plot_energy_landscape(results, title='Energy Landscape', output_filepath=Non
 
     # Save or show
     if output_filepath:
-        plt.savefig(f'{output_filepath}/energy_landscape.csv', bbox_inches='tight', dpi=300)
+        plt.savefig(f'{output_filepath}/energy_landscape.png', bbox_inches='tight', dpi=300)
         plt.close()
     else:
         plt.show()
@@ -223,7 +227,7 @@ def model(optimal_results, lambdah_value, num_simulations, seed_binary_network, 
     with open(f'{output_filepath}/model.pkl', 'wb') as f:
         pickle.dump(model, f)
 
-def analyse_model(averaged_matrices, model_filepath):
+def analyse_model(averaged_matrices, output_filepath=None):
     """
     Analyses a model by visualizing averaged matrices, computing graph metrics, 
     and saving distributions and a correlation heatmap to the specified filepath.
@@ -274,7 +278,7 @@ def analyse_model(averaged_matrices, model_filepath):
     plt.savefig(f'{output_filepath}/averaged_matrices.png', dpi=300)
     plt.close(fig)
 
-    # Analyze the final simulated timepoint
+    # Analyse the final simulated timepoint
     t1_sim_adjM = averaged_matrices[-1]
 
     # Compute graph metrics
@@ -414,19 +418,19 @@ for slice in slice_data:
 
 # %% Set Parameterspace to Explore --------------------------------------------------
 # Define parameters
-eta_values = torch.linspace(-5, 1.7, 50) ########## increase when testing large parameterspace
-gamma_values = torch.linspace(-5, 1.7, 50) ########## increase when testing large parameterspace
+eta_values = torch.linspace(-5, 1.7, 100) ########## increase when testing large parameterspace
+gamma_values = torch.linspace(-5, 1.7, 100) ########## increase when testing large parameterspace
 lambdah_value = 2.0  # Fixed lambda
 
 # Number of networks to generate per parameter combination
-num_simulations = 4 ########## increase when testing large parameterspace
+num_simulations = 10 ########## increase when testing large parameterspace
 
 # %% t0-t1 Parameter Sweep --------------------------------------------------
 # Set output
 t0_t1_sweep_filepath='/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Parameter sweeps/t0_t1'
 
 # Parameter sweep
-t0_t1_results = parameter_sweep(
+t0_t1_results, t0_t1_optimal_results = parameter_sweep(
     eta_values=eta_values,
     gamma_values=gamma_values,
     lambdah_value=lambdah_value,
@@ -439,9 +443,9 @@ t0_t1_results = parameter_sweep(
     output_filepath=t0_t1_sweep_filepath
     )
 
-
 # Plot energy landscape
-plot_energy_landscape(results=t0_t1_results[0], title='t0 → t1 Energy Landscape', output_filepath=t0_t1_sweep_filepath)
+plot_energy_landscape(results=t0_t1_results, title='t0 → t1 Energy Landscape', output_filepath=t0_t1_sweep_filepath)
+
 
 # %% t0-t1 Model --------------------------------------------------
 # Load the optimal results into a DataFrame
@@ -466,13 +470,20 @@ t0_t1_model = model(
 # %% t0-t1 Assess Model --------------------------------------------------
 # Load the model's averaged matrices
 t0_t1_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t0_t1'
-averaged_matrices = np.load(f'{t0_t1_model_filepath}_averaged_matrices.npy')
+t0_t1_averaged_matrices = np.load(f'{t0_t1_model_filepath}/averaged_matrices.npy')
 
 # Analyse the t0-t1 model
-analyse_model(averaged_matrices, t0_t1_model_filepath)
+analyse_model(averaged_matrices=t0_t1_averaged_matrices, output_filepath=t0_t1_model_filepath)
 
 
 # %% t1-t2 Parameter Sweep --------------------------------------------------
+# Load the model's averaged matrices
+t0_t1_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t0_t1'
+t0_t1_averaged_matrices = np.load(f'{t0_t1_model_filepath}_averaged_matrices.npy')
+
+# Get last timepoint from t0-t1 model
+simulated_t1 = t0_t1_averaged_matrices[-1]
+
 # Parameter sweep
 t1_t2_results = parameter_sweep(
     eta_values=eta_values,
@@ -488,7 +499,7 @@ t1_t2_results = parameter_sweep(
     )
 
 # Plot energy landscape
-plot_energy_landscape(results=t1_t2_results[0], title='t0 → t1 Energy Landscape', save_path=None)
+plot_energy_landscape(results=t1_t2_results[0], title='t0 → t1 Energy Landscape', output_filepath=None)
 
 
 # %% t2-t3 Parameter Sweep --------------------------------------------------
@@ -507,7 +518,7 @@ t2_t3_results = parameter_sweep(
 )
 
 # Plot energy landscape
-plot_energy_landscape(results=t2_t3_results[0], title='t0 → t1 Energy Landscape', save_path=None)
+plot_energy_landscape(results=t2_t3_results[0], title='t0 → t1 Energy Landscape', output_filepath=None)
 
 
 # %%
