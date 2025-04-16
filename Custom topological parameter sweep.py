@@ -190,12 +190,18 @@ def model(optimal_results, lambdah_value, num_simulations, seed_binary_network, 
         binary_updates_per_iteration=1
         )
 
+    if seed_binary_network is None:
+        seed_adjacency_matrix = None
+    else:
+        seed_adjacency_matrix = seed_binary_network
+
     # Define the model
     model = gnm.GenerativeNetworkModel(
             binary_parameters=binary_parameters,
             num_simulations=num_simulations,
             num_nodes=num_nodes,
             distance_matrix=distance_matrix,
+            seed_adjacency_matrix=seed_adjacency_matrix
             )
 
     # Run the model
@@ -234,10 +240,10 @@ def analyse_model(averaged_matrices, output_filepath=None):
 
     Parameters:
         averaged_matrices (np.ndarray): Averaged matrices from the model.
-        model_filepath (str): Filepath for saving the plots.
+        output_filepath (str): Filepath for saving the plots.
     """
     # Ensure the output directory exists
-    os.makedirs(model_filepath, exist_ok=True)
+    os.makedirs(output_filepath, exist_ok=True)
 
     # Visualize all averaged matrices
     num_matrices = len(averaged_matrices)
@@ -279,35 +285,35 @@ def analyse_model(averaged_matrices, output_filepath=None):
     plt.close(fig)
 
     # Analyse the final simulated timepoint
-    t1_sim_adjM = averaged_matrices[-1]
+    sim_adjm = averaged_matrices[-1]
 
     # Compute graph metrics
-    degree = np.sum(t1_sim_adjM != 0, axis=0)
-    total_edge_length = np.sum(t1_sim_adjM, axis=0)
-    clustering = bct.clustering_coef_bu(t1_sim_adjM)
-    betweenness = bct.betweenness_wei(1 / (t1_sim_adjM + np.finfo(float).eps))
-    efficiency = bct.efficiency_wei(t1_sim_adjM, local=True)
+    degree = np.sum(sim_adjm != 0, axis=0)
+    total_edge_length = np.sum(sim_adjm, axis=0)
+    clustering = bct.clustering_coef_bu(sim_adjm)
+    betweenness = bct.betweenness_wei(1 / (sim_adjm + np.finfo(float).eps))
+    efficiency = bct.efficiency_wei(sim_adjm, local=True)
 
     # Compute matching index
-    N = t1_sim_adjM.shape[0]
+    N = sim_adjm.shape[0]
     matching_matrix = np.zeros((N, N))
     for i in range(N):
         for j in range(N):
             if i != j:
-                min_weights = np.minimum(t1_sim_adjM[i, :], t1_sim_adjM[j, :])
-                max_weights = np.maximum(t1_sim_adjM[i, :], t1_sim_adjM[j, :])
+                min_weights = np.minimum(sim_adjm[i, :], sim_adjm[j, :])
+                max_weights = np.maximum(sim_adjm[i, :], sim_adjm[j, :])
                 if np.sum(max_weights) > 0:  # Avoid division by zero
                     matching_matrix[i, j] = np.sum(min_weights) / np.sum(max_weights)
 
     # Save adjacency matrix plot
     plt.figure(figsize=(7, 6))
-    ax = sns.heatmap(t1_sim_adjM, cmap='viridis', cbar=True)
+    ax = sns.heatmap(sim_adjm, cmap='viridis', cbar=True)
     ax.set_title('Thresholded Adjacency Matrix', fontsize=14)
     num_labels = 10
-    ax.set_xticks(np.linspace(0, t1_sim_adjM.shape[1] - 1, num_labels))
-    ax.set_yticks(np.linspace(0, t1_sim_adjM.shape[0] - 1, num_labels))
-    ax.set_xticklabels(np.linspace(0, t1_sim_adjM.shape[1] - 1, num_labels, dtype=int))
-    ax.set_yticklabels(np.linspace(0, t1_sim_adjM.shape[0] - 1, num_labels, dtype=int))
+    ax.set_xticks(np.linspace(0, sim_adjm.shape[1] - 1, num_labels))
+    ax.set_yticks(np.linspace(0, sim_adjm.shape[0] - 1, num_labels))
+    ax.set_xticklabels(np.linspace(0, sim_adjm.shape[1] - 1, num_labels, dtype=int))
+    ax.set_yticklabels(np.linspace(0, sim_adjm.shape[0] - 1, num_labels, dtype=int))
     plt.savefig(f'{output_filepath}/adjacency_matrix.png', dpi=300)
     plt.close()
 
@@ -390,15 +396,15 @@ for slice in slice_data:
         adjM_thresholded = bct.threshold_proportional(adjM, 0.05)
         
         # Create (50, 50) subsets for testing
-        adjM_thresholded = adjM_thresholded[:50, :50]  # Remove when testing larger network
-        dij = dij[:50, :50]  # Remove when testing larger network
+        adjM_thresholded = adjM_thresholded[:50, :50]  ########## Remove when testing larger network
+        dij = dij[:50, :50]  ########## Remove when testing larger network
 
         # Get the number of nodes and connections
         num_nodes = adjM_thresholded.shape[0]
         num_connections = np.count_nonzero(adjM_thresholded) // 2
 
-        # Binarize the adjacency matrix
-        adjM_thresholded = (adjM_thresholded > 0).astype(int)  # Remove when changing to weighted
+        # Binarise the adjacency matrix
+        adjM_thresholded = (adjM_thresholded > 0).astype(int) ########## Remove when changing to weighted
 
         # Convert matrices to PyTorch tensors
         binary_network = torch.tensor(adjM_thresholded, dtype=torch.float)
@@ -418,12 +424,12 @@ for slice in slice_data:
 
 # %% Set Parameterspace to Explore --------------------------------------------------
 # Define parameters
-eta_values = torch.linspace(-5, 1.7, 100) ########## increase when testing large parameterspace
-gamma_values = torch.linspace(-5, 1.7, 100) ########## increase when testing large parameterspace
+eta_values = torch.linspace(-5, 1.7, 50) ########## increase when testing large parameterspace
+gamma_values = torch.linspace(-5, 1.7, 50) ########## increase when testing large parameterspace
 lambdah_value = 2.0  # Fixed lambda
 
 # Number of networks to generate per parameter combination
-num_simulations = 10 ########## increase when testing large parameterspace
+num_simulations = 4 ########## increase when testing large parameterspace
 
 # %% t0-t1 Parameter Sweep --------------------------------------------------
 # Set output
@@ -450,7 +456,7 @@ plot_energy_landscape(results=t0_t1_results, title='t0 → t1 Energy Landscape',
 # %% t0-t1 Model --------------------------------------------------
 # Load the optimal results into a DataFrame
 t0_t1_sweep_filepath='/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Parameter sweeps/t0_t1'
-t0_t1_results = pd.read_csv(f'{t0_t1_sweep_filepath}_optimal.csv')
+t0_t1_results = pd.read_csv(f'{t0_t1_sweep_filepath}/optimal_parameters.csv')
 
 t0_t1_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t0_t1'
 
@@ -479,46 +485,137 @@ analyse_model(averaged_matrices=t0_t1_averaged_matrices, output_filepath=t0_t1_m
 # %% t1-t2 Parameter Sweep --------------------------------------------------
 # Load the model's averaged matrices
 t0_t1_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t0_t1'
-t0_t1_averaged_matrices = np.load(f'{t0_t1_model_filepath}_averaged_matrices.npy')
+t0_t1_averaged_matrices = np.load(f'{t0_t1_model_filepath}/averaged_matrices.npy')
 
 # Get last timepoint from t0-t1 model
 simulated_t1 = t0_t1_averaged_matrices[-1]
 
+# Threshold the adjacency matrix to retain the top 5% strongest connections
+simulated_t1 = bct.threshold_proportional(simulated_t1, 0.05)
+
+# Binarise
+simulated_t1 = (simulated_t1 > 0).astype(int)  ########## Remove when changing to weighted
+
+# Convert to PyTorch tensor
+simulated_t1 = torch.tensor(simulated_t1, dtype=torch.float)
+
+# Set output
+t1_t2_sweep_filepath='/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Parameter sweeps/t1_t2'
+
 # Parameter sweep
-t1_t2_results = parameter_sweep(
+t1_t2_results, t1_t2_optimal_results = parameter_sweep(
     eta_values=eta_values,
     gamma_values=gamma_values,
     lambdah_value=lambdah_value,
     num_simulations=num_simulations,
-    seed_binary_network=modelling_data[0]['binary_network'],
-    binary_network=modelling_data[1]['binary_network'], ########## change this to the simulated t1 network
-    distance_matrix=modelling_data[1]['distance_matrix'], ########## change this to the simulated t1 dij
-    num_nodes=modelling_data[1]['num_nodes'], ########## change this to the simulated t1 numnodes 
-    num_connections=modelling_data[1]['num_connections'], ########## change this to the simulated t1 numconnections
-    output_filepath='/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Parameter sweeps/t1_t2'
+    seed_binary_network=simulated_t1,
+    binary_network=modelling_data[1]['binary_network'],
+    distance_matrix=modelling_data[1]['distance_matrix'],
+    num_nodes=modelling_data[1]['num_nodes'],
+    num_connections=modelling_data[1]['num_connections'],
+    output_filepath=t1_t2_sweep_filepath
     )
 
 # Plot energy landscape
-plot_energy_landscape(results=t1_t2_results[0], title='t0 → t1 Energy Landscape', output_filepath=None)
+plot_energy_landscape(results=t1_t2_results, title='t1 → t2 Energy Landscape', output_filepath=t1_t2_sweep_filepath)
+
+
+# %% t1-t2 Model --------------------------------------------------
+# Load the optimal results into a DataFrame
+t1_t2_sweep_filepath='/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Parameter sweeps/t1_t2'
+t1_t2_results = pd.read_csv(f'{t1_t2_sweep_filepath}/optimal_parameters.csv')
+
+t1_t2_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t1_t2'
+
+# Create the model
+t1_t2_model = model(
+    optimal_results=t1_t2_results,
+    lambdah_value=lambdah_value,
+    num_simulations=num_simulations,
+    seed_binary_network=simulated_t1,
+    binary_network=modelling_data[1]['binary_network'],
+    distance_matrix=modelling_data[1]['distance_matrix'],
+    num_nodes=modelling_data[1]['num_nodes'],
+    num_connections=modelling_data[1]['num_connections'],
+    output_filepath=t1_t2_model_filepath
+    )
+
+
+# %% t1-t2 Assess Model --------------------------------------------------
+# Load the model's averaged matrices
+t1_t2_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t1_t2'
+t1_t2_averaged_matrices = np.load(f'{t1_t2_model_filepath}/averaged_matrices.npy')
+
+# Analyse the t0-t1 model
+analyse_model(averaged_matrices=t1_t2_averaged_matrices, output_filepath=t1_t2_model_filepath)
 
 
 # %% t2-t3 Parameter Sweep --------------------------------------------------
+# Load the model's averaged matrices
+t1_t2_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t1_t2'
+t1_t2_averaged_matrices = np.load(f'{t1_t2_model_filepath}/averaged_matrices.npy')
+
+# Get last timepoint from t0-t1 model
+simulated_t2 = t1_t2_averaged_matrices[-1]
+
+# Threshold the adjacency matrix to retain the top 5% strongest connections
+simulated_t2 = bct.threshold_proportional(simulated_t2, 0.05)
+
+# Binarise
+simulated_t2 = (simulated_t2 > 0).astype(int)  ########## Remove when changing to weighted
+
+# Convert to PyTorch tensor
+simulated_t2 = torch.tensor(simulated_t2, dtype=torch.float)
+
+# Set output
+t2_t3_sweep_filepath='/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Parameter sweeps/t2_t3'
+
 # Parameter sweep
-t2_t3_results = parameter_sweep(
+t2_t3_results, t2_t3_optimal_results = parameter_sweep(
     eta_values=eta_values,
     gamma_values=gamma_values,
     lambdah_value=lambdah_value,
     num_simulations=num_simulations,
-    seed_binary_network=modelling_data[1]['binary_network'],
-    binary_network=modelling_data[2]['binary_network'], ########## change this to the simulated t2 network
-    distance_matrix=modelling_data[2]['distance_matrix'], ########## change this to the simulated t2 dij
-    num_nodes=modelling_data[2]['num_nodes'], ########## change this to the simulated t2 numnodes 
-    num_connections=modelling_data[2]['num_connections'], ########## change this to the simulated t2 numconnections
-    output_filepath='/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Parameter sweeps/t1_t2'
-)
+    seed_binary_network=simulated_t2,
+    binary_network=modelling_data[2]['binary_network'],
+    distance_matrix=modelling_data[2]['distance_matrix'],
+    num_nodes=modelling_data[2]['num_nodes'],
+    num_connections=modelling_data[2]['num_connections'],
+    output_filepath=t2_t3_sweep_filepath
+    )
 
 # Plot energy landscape
-plot_energy_landscape(results=t2_t3_results[0], title='t0 → t1 Energy Landscape', output_filepath=None)
+plot_energy_landscape(results=t2_t3_results, title='t2 → t3 Energy Landscape', output_filepath=t2_t3_sweep_filepath)
+
+
+# %% t2-t3 Model --------------------------------------------------
+# Load the optimal results into a DataFrame
+t2_t3_sweep_filepath='/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Parameter sweeps/t2_t3'
+t2_t3_results = pd.read_csv(f'{t2_t3_sweep_filepath}/optimal_parameters.csv')
+
+t2_t3_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t2_t3'
+
+# Create the model
+t2_t3_model = model(
+    optimal_results=t2_t3_results,
+    lambdah_value=lambdah_value,
+    num_simulations=num_simulations,
+    seed_binary_network=simulated_t2,
+    binary_network=modelling_data[2]['binary_network'],
+    distance_matrix=modelling_data[2]['distance_matrix'],
+    num_nodes=modelling_data[2]['num_nodes'],
+    num_connections=modelling_data[2]['num_connections'],
+    output_filepath=t2_t3_model_filepath
+    )
+
+
+# %% t2-t3 Assess Model --------------------------------------------------
+# Load the model's averaged matrices
+t2_t3_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t2_t3'
+t2_t3_averaged_matrices = np.load(f'{t2_t3_model_filepath}/averaged_matrices.npy')
+
+# Analyse the t0-t1 model
+analyse_model(averaged_matrices=t2_t3_averaged_matrices, output_filepath=t2_t3_model_filepath)
 
 
 # %%
