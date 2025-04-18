@@ -4,6 +4,7 @@ import bct
 import gnm
 from gnm import fitting, evaluation, BinaryGenerativeParameters, GenerativeNetworkModel
 from gnm.generative_rules import MatchingIndex
+from gnm.weight_criteria import Communicability
 
 # Operations
 import numpy as np
@@ -21,7 +22,8 @@ import seaborn as sns
 
 
 # %% Define Functions --------------------------------------------------
-def parameter_sweep(eta_values, gamma_values, lambdah_value, num_simulations, seed_binary_network, binary_network, distance_matrix, num_nodes, num_connections, output_filepath=None):
+def parameter_sweep(eta_values, gamma_values, lambdah_value, num_simulations, seed_weighted_network=None, seed_binary_network=None, weighted_network=None, binary_network=None, distance_matrix, num_nodes, num_connections, output_filepath=None):
+        
     # Carry out parameter sweep ----------
     # Define binary sweep parameters
     binary_sweep_parameters = fitting.BinarySweepParameters(
@@ -35,38 +37,59 @@ def parameter_sweep(eta_values, gamma_values, lambdah_value, num_simulations, se
         num_iterations=[num_connections],  # Match the number of connections in real network
     )
 
+    # Define weighted sweep parameters
+    weighted_sweep_parameters = gnm.fitting.WeightedSweepParameters(
+        alpha=torch.tensor([0.05]),
+        optimisation_criterion=[Communicability(omega=1.0)],
+        )
+
     if seed_binary_network is None:
         seed_adjacency_matrix = None
     else:
         seed_adjacency_matrix = [seed_binary_network]
-    
+
     # Configuration for the parameter sweep
     sweep_config = fitting.SweepConfig(
-        binary_sweep_parameters=binary_sweep_parameters,
+        #binary_sweep_parameters=binary_sweep_parameters, ########## keep if binary
         num_simulations=num_simulations,
+        seed_adjacency_matrix=seed_adjacency_matrix,
         distance_matrix=[distance_matrix],
-        seed_adjacency_matrix=seed_adjacency_matrix
+        weighted_sweep_parameters=weighted_sweep_parameters, ########## keep if weighted
+        seed_weight_matrix=seed_weighted_network ########## keep if weighted
     )
 
-    # List of criteria for evaluating binary network properties
+    # List of criteria for evaluating binary network properties ---------- ######## keep if binary
     criteria = [
-        evaluation.DegreeKS(), # Compare degree distributions
-        evaluation.ClusteringKS(), # Compare clustering coefficients
-        evaluation.BetweennessKS(), # Compare betweenness centrality
-        evaluation.EdgeLengthKS(distance_matrix) # Compare edge length distributions
+        evaluation.DegreeKS(),
+        evaluation.ClusteringKS(),
+        evaluation.BetweennessKS(),
+        evaluation.EdgeLengthKS(distance_matrix)
     ]
-
+    
     # Use the maximum KS statistic across all evaluations to measure network similarity
     energy = evaluation.MaxCriteria(criteria)
     binary_evaluations = [energy]
 
+    # List of criteria for evaluating weighted network properties ---------- ######## keep if weighted
+    criteria = [
+        evaluation.WeightedNodeStrengthKS(),
+        evaluation.WeightedBetweennessKS(),
+        evaluation.WeightedClusteringKS()
+    ]
+
+    # Use the maximum KS statistic across all evaluations to measure network similarity
+    energy = evaluation.MaxCriteria(criteria)
+    weighted_evaluations = [energy]
+
     # Run the Parameter Sweep
     experiments = fitting.perform_sweep(
         sweep_config=sweep_config,
-        binary_evaluations=binary_evaluations,
-        real_binary_matrices=binary_network,  # Real network to compare synthetic networks against
-        save_run_history=False, # If True, saves the model in the experiment - set to False to save on memory
-        verbose=True, # If True, displays a progress bar for the sweep
+        #binary_evaluations=binary_evaluations, ########## keep if binary
+        weighted_evaluations=weighted_evaluations, ########## keep if weighted
+        real_binary_matrices=binary_network,
+        real_weighted_matrices=weighted_network,
+        save_run_history=False,
+        verbose=True,
     )
 
     # Assess Parameter Combinations ----------
@@ -404,9 +427,11 @@ for slice in slice_data:
         num_connections = np.count_nonzero(adjM_thresholded) // 2
 
         # Binarise the adjacency matrix
-        adjM_thresholded = (adjM_thresholded > 0).astype(int) ########## Remove when changing to weighted
+        binary_adjM_thresholded = (adjM_thresholded > 0).astype(int) ########## Remove when changing to weighted
 
         # Convert matrices to PyTorch tensors
+        weighted_network = torch.tensor(adjM, dtype=torch.float)
+        weighted_network = weighted_network.unsqueeze(0)
         binary_network = torch.tensor(adjM_thresholded, dtype=torch.float)
         binary_network = binary_network.unsqueeze(0)
         distance_matrix = torch.tensor(dij, dtype=torch.float)
@@ -414,9 +439,10 @@ for slice in slice_data:
         # Add the data to the modelling_data list
         modelling_data.append({
             'file_name': slice['file_name'],
-            'adjM_thresholded': adjM_thresholded,  # Change to adjM_thresholded when testing larger network
+            'adjM_thresholded': adjM_thresholded,
+            'weighted_network': weighted_network,
             'binary_network': binary_network,
-            'dij': dij,  # Change to dij when testing larger network
+            'dij': dij,
             'distance_matrix': distance_matrix,
             'num_nodes': num_nodes,
             'num_connections': num_connections
@@ -424,12 +450,12 @@ for slice in slice_data:
 
 # %% Set Parameterspace to Explore --------------------------------------------------
 # Define parameters
-eta_values = torch.linspace(-5, 1.7, 50) ########## increase when testing large parameterspace
-gamma_values = torch.linspace(-5, 1.7, 50) ########## increase when testing large parameterspace
+eta_values = torch.linspace(-5, 1.7, 10) ########## increase when testing large parameterspace
+gamma_values = torch.linspace(-5, 1.7, 10) ########## increase when testing large parameterspace
 lambdah_value = 2.0  # Fixed lambda
 
 # Number of networks to generate per parameter combination
-num_simulations = 4 ########## increase when testing large parameterspace
+num_simulations = 2 ########## increase when testing large parameterspace
 
 # %% t0-t1 Parameter Sweep --------------------------------------------------
 # Set output
@@ -441,8 +467,10 @@ t0_t1_results, t0_t1_optimal_results = parameter_sweep(
     gamma_values=gamma_values,
     lambdah_value=lambdah_value,
     num_simulations=num_simulations,
-    seed_binary_network=None,
-    binary_network=modelling_data[0]['binary_network'],
+    #seed_binary_network=None,
+    seed_weighted_network=None,
+    weighted_network=modelling_data[0]['weighted_network'], ########## keep if weighted
+    #binary_network=modelling_data[0]['binary_network'], ########## keep if binary
     distance_matrix=modelling_data[0]['distance_matrix'],
     num_nodes=modelling_data[0]['num_nodes'],
     num_connections=modelling_data[0]['num_connections'],
