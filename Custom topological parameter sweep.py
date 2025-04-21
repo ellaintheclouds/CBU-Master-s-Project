@@ -17,15 +17,46 @@ from scipy.spatial.distance import cdist
 
 # Plotting
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 import pandas as pd
+import plotly.graph_objects as go
 import seaborn as sns
 
 
 # %% Define Functions --------------------------------------------------
-def parameter_sweep(eta_values, gamma_values, lambdah_value, num_simulations, seed_weighted_network=None, seed_binary_network=None, weighted_network=None, binary_network=None, distance_matrix, num_nodes, num_connections, output_filepath=None):
-        
-    # Carry out parameter sweep ----------
-    # Define binary sweep parameters
+def parameter_sweep(
+    eta_values,
+    gamma_values,
+    lambdah_value,
+    num_simulations,
+    distance_matrix,
+    num_nodes,
+    num_connections,
+    seed_weighted_network=None,
+    seed_binary_network=None,
+    weighted_network=None,
+    binary_network=None,
+    output_filepath=None
+):
+    # Determine mode ----------
+    is_weighted = weighted_network is not None
+
+    # Print what mode is being used
+    print(f"Running parameter sweep in {'weighted' if is_weighted else 'binary'} mode.")
+
+    # Set up sweep parameters ----------
+    # Weighted mode
+    if is_weighted:
+        weighted_sweep_parameters = fitting.WeightedSweepParameters(
+            alpha=torch.tensor([0.05]),
+            optimisation_criterion=[Communicability(omega=1.0)],
+        )
+
+    # Binary mode
+    else:
+        weighted_sweep_parameters = None  # Not used in binary mode
+    
+    # Binary parameters passed regardless of mode
     binary_sweep_parameters = fitting.BinarySweepParameters(
         eta=eta_values,
         gamma=gamma_values,
@@ -33,128 +64,135 @@ def parameter_sweep(eta_values, gamma_values, lambdah_value, num_simulations, se
         distance_relationship_type=['powerlaw'],
         preferential_relationship_type=['powerlaw'],
         heterochronicity_relationship_type=['powerlaw'],
-        generative_rule=[MatchingIndex(divisor='mean')],  # Use Matching Index rule
-        num_iterations=[num_connections],  # Match the number of connections in real network
+        generative_rule=[MatchingIndex(divisor='mean')],
+        num_iterations=[num_connections],
     )
 
-    # Define weighted sweep parameters
-    weighted_sweep_parameters = gnm.fitting.WeightedSweepParameters(
-        alpha=torch.tensor([0.05]),
-        optimisation_criterion=[Communicability(omega=1.0)],
-        )
-
-    if seed_binary_network is None:
-        seed_adjacency_matrix = None
-    else:
-        seed_adjacency_matrix = [seed_binary_network]
-
-    # Configuration for the parameter sweep
+    # Create SweepConfig ----------
     sweep_config = fitting.SweepConfig(
-        #binary_sweep_parameters=binary_sweep_parameters, ########## keep if binary
+        binary_sweep_parameters=binary_sweep_parameters,
+        weighted_sweep_parameters=weighted_sweep_parameters,
         num_simulations=num_simulations,
-        seed_adjacency_matrix=seed_adjacency_matrix,
-        distance_matrix=[distance_matrix],
-        weighted_sweep_parameters=weighted_sweep_parameters, ########## keep if weighted
-        seed_weight_matrix=seed_weighted_network ########## keep if weighted
+        distance_matrix=distance_matrix,
+        seed_adjacency_matrix=seed_binary_network,
+        seed_weight_matrix=seed_weighted_network
     )
 
-    # List of criteria for evaluating binary network properties ---------- ######## keep if binary
-    criteria = [
-        evaluation.DegreeKS(),
-        evaluation.ClusteringKS(),
-        evaluation.BetweennessKS(),
-        evaluation.EdgeLengthKS(distance_matrix)
-    ]
-    
-    # Use the maximum KS statistic across all evaluations to measure network similarity
-    energy = evaluation.MaxCriteria(criteria)
-    binary_evaluations = [energy]
+    # Define evaluation criteria ----------
+    if is_weighted:
+        criteria = [
+            evaluation.WeightedNodeStrengthKS(),
+            evaluation.WeightedBetweennessKS(),
+            evaluation.WeightedClusteringKS()
+        ]
+        eval_set = [evaluation.MaxCriteria(criteria)]
+    else:
+        criteria = [
+            evaluation.DegreeKS(),
+            evaluation.ClusteringKS(),
+            evaluation.BetweennessKS(),
+            evaluation.EdgeLengthKS(distance_matrix)
+        ]
+        eval_set = [evaluation.MaxCriteria(criteria)]
 
-    # List of criteria for evaluating weighted network properties ---------- ######## keep if weighted
-    criteria = [
-        evaluation.WeightedNodeStrengthKS(),
-        evaluation.WeightedBetweennessKS(),
-        evaluation.WeightedClusteringKS()
-    ]
-
-    # Use the maximum KS statistic across all evaluations to measure network similarity
-    energy = evaluation.MaxCriteria(criteria)
-    weighted_evaluations = [energy]
-
-    # Run the Parameter Sweep
+    # Run the Parameter Sweep ----------
     experiments = fitting.perform_sweep(
         sweep_config=sweep_config,
-        #binary_evaluations=binary_evaluations, ########## keep if binary
-        weighted_evaluations=weighted_evaluations, ########## keep if weighted
-        real_binary_matrices=binary_network,
-        real_weighted_matrices=weighted_network,
+        weighted_evaluations=eval_set if is_weighted else None,
+        binary_evaluations=eval_set if not is_weighted else None,
+        real_binary_matrices=binary_network if not is_weighted else None,
+        real_weighted_matrices=weighted_network if is_weighted else None,
         save_run_history=False,
-        verbose=True,
+        verbose=True
     )
 
-    # Assess Parameter Combinations ----------
-    # Initialize an empty list to store the results
+    # Evaluate Results ----------
     all_results = []
 
-    # Iterate through each experiment
     for experiment in experiments:
         model = experiment.model
-        eval_results = fitting.perform_evaluations(
-            model=model,  # Model to evaluate
-            binary_evaluations=binary_evaluations,
-            real_binary_matrices=binary_network
-        )
-        
-        # Extract eta and gamma
-        eta = experiment.run_config.binary_parameters.eta.item()
-        gamma = experiment.run_config.binary_parameters.gamma.item()
-        
-        # Extract the values for the key
-        key = 'MaxCriteria(DegreeKS, ClusteringKS, BetweennessKS, EdgeLengthKS)'
-        values = eval_results.binary_evaluations[key]
-        
-        # Compute the mean of the values
-        mean_value = torch.mean(values).item()
-        
-        # Append the results to the list
-        all_results.append({
-            'eta': eta,
-            'gamma': gamma,
-            'mean_energy': mean_value,
-        })
 
-    # Find the optimal parameter combination
+        if is_weighted:
+            # Evaluation
+            eval_results = fitting.perform_evaluations(
+                model=model,
+                weighted_evaluations=eval_set,
+                real_weighted_matrices=weighted_network
+            )
+            
+            # Get parameters
+            alpha = experiment.run_config.weighted_parameters.alpha.item()
+            eta = experiment.run_config.binary_parameters.eta.item()
+            gamma = experiment.run_config.binary_parameters.gamma.item()
+            key = 'MaxCriteria(WeightedNodeStrengthKS, WeightedBetweennessKS, WeightedClusteringKS)'
+            values = eval_results.weighted_evaluations[key]
+            mean_value = torch.mean(values).item()
+
+            # Append results
+            all_results.append({
+                'eta': eta,
+                'gamma': gamma,
+                'alpha': alpha,
+                'mean_energy': mean_value
+            })
+
+        else:
+            # Evaluation
+            eval_results = fitting.perform_evaluations(
+                model=model,
+                binary_evaluations=eval_set,
+                real_binary_matrices=binary_network
+            )
+
+            # Get parameters
+            eta = experiment.run_config.binary_parameters.eta.item()
+            gamma = experiment.run_config.binary_parameters.gamma.item()
+            key = 'MaxCriteria(DegreeKS, ClusteringKS, BetweennessKS, EdgeLengthKS)'
+            values = eval_results.binary_evaluations[key]
+            mean_value = torch.mean(values).item()
+
+            # Append results
+            all_results.append({
+                'eta': eta,
+                'gamma': gamma,
+                'mean_energy': mean_value
+            })
+
+    # Optimal Parameter Selection ----------
     optimal_experiments, optimal_energies = fitting.optimise_evaluation(
         experiments=experiments,
-        criterion=energy,
+        criterion=eval_set[0]
     )
 
-    # Convert optimal_results to DataFrame
     optimal_results = []
-    for exp, energy in zip(optimal_experiments, optimal_energies):
-        optimal_results.append({
+    for exp, energy_val in zip(optimal_experiments, optimal_energies):
+        # Create a single dictionary for all parameters
+        result = {
+            'energy': energy_val.item(),
             'eta': exp.run_config.binary_parameters.eta.item(),
             'gamma': exp.run_config.binary_parameters.gamma.item(),
-            'energy': energy.item()
-        })
+            'lambdah': lambdah_value
+        }
 
-    # Save results to CSV files if file paths are provided
+        # Add alpha only if in weighted mode
+        if is_weighted:
+            result['alpha'] = exp.run_config.weighted_parameters.alpha.item()
+
+        # Append the combined dictionary to the list
+        optimal_results.append(result)
+
+    # Save to disk ----------
     if output_filepath:
         pd.DataFrame(all_results).to_csv(f'{output_filepath}/all_parameters.csv', index=False)
         pd.DataFrame(optimal_results).to_csv(f'{output_filepath}/optimal_parameters.csv', index=False)
 
-    # Return
     return all_results, optimal_results
 
-def plot_energy_landscape(results, title='Energy Landscape', output_filepath=None):
-    """
-    Plots the energy landscape from the parameter sweep results.
+def plot_energy_landscape(
+    results,
+    title='Energy Landscape',
+    output_filepath=None):
 
-    Parameters:
-        results (pd.DataFrame): DataFrame containing the energy landscape data.
-        title (str): Title of the plot.
-        output_filepath (str): Filepath to save the plot. If None, the plot is shown.
-    """
     # Convert to DataFrame
     df = pd.DataFrame(results)
 
@@ -198,12 +236,42 @@ def plot_energy_landscape(results, title='Energy Landscape', output_filepath=Non
     else:
         plt.show()
 
-def model(optimal_results, lambdah_value, num_simulations, seed_binary_network, binary_network, distance_matrix, num_nodes, num_connections, output_filepath=None):
-    # Use the optimal parameters from the parameter sweep
+def model(
+    optimal_results,
+    num_simulations,
+    distance_matrix,
+    num_nodes,
+    num_connections,
+    seed_binary_network=None,
+    seed_weighted_network=None,
+    binary_network=None,
+    weighted_network=None,
+    output_filepath=None
+    ):
+
+    # Determine mode ----------
+    is_weighted = weighted_network is not None
+
+    # Print what mode is being used
+    print(f"Running model in {'weighted' if is_weighted else 'binary'} mode.")
+
+    # Set up sweep parameters ----------
+    # Weighted mode
+    if is_weighted:
+        weighted_parameters = gnm.WeightedGenerativeParameters(
+            alpha=torch.tensor(0.05),
+            optimisation_criterion=Communicability(omega=1.0)
+        )
+
+    # Binary mode
+    else:
+        weighted_parameters = None  # Not used in binary mode
+    
+    # Binary parameters passed regardless of mode
     binary_parameters = gnm.BinaryGenerativeParameters(
         eta=float(optimal_results['eta'].iloc[0]),
         gamma=float(optimal_results['gamma'].iloc[0]),
-        lambdah=lambdah_value,
+        lambdah=optimal_results['lambdah'][0],
         distance_relationship_type='powerlaw',
         preferential_relationship_type='powerlaw',
         heterochronicity_relationship_type='powerlaw',
@@ -213,28 +281,66 @@ def model(optimal_results, lambdah_value, num_simulations, seed_binary_network, 
         binary_updates_per_iteration=1
         )
 
-    if seed_binary_network is None:
-        seed_adjacency_matrix = None
-    else:
-        seed_adjacency_matrix = seed_binary_network
+    if seed_binary_network is not None:
+        # Repeat the 50x50 matrix along the first dimension to match num_simulations ########## remove if I use the real 4 matrices to seed instead of an averaged matrix
+        seed_binary_network = seed_binary_network.repeat(num_simulations, 1, 1)  # Shape becomes (4, 50, 50) ########## remove if I use the real 4 matrices to seed instead of an averaged matrix
+
+        print("Size of seed binary network:", seed_binary_network.shape)  ########## Debugging line
+
+    if seed_weighted_network is not None:
+        # Repeat the 50x50 matrix along the first dimension to match num_simulations ########## remove if I use the real 4 matrices to seed instead of an averaged matrix
+        seed_weighted_network = seed_weighted_network.repeat(num_simulations, 1, 1) # Shape becomes (4, 50, 50) ########## remove if I use the real 4 matrices to seed instead of an averaged matrix
+
+    # Repeat the 50x50 matrix along the first dimension to match num_simulations ########## remove if I use the real 4 matrices to seed instead of an averaged matrix
+    distance_matrix = distance_matrix.repeat(num_simulations, 1, 1)  # Shape becomes (4, 50, 50) ########## remove if I use the real 4 matrices to seed instead of an averaged matrix
+
+    print("Size of distance matrix:", distance_matrix.shape)  ########## Debugging line
 
     # Define the model
     model = gnm.GenerativeNetworkModel(
             binary_parameters=binary_parameters,
             num_simulations=num_simulations,
             num_nodes=num_nodes,
+            seed_adjacency_matrix=seed_binary_network,
             distance_matrix=distance_matrix,
-            seed_adjacency_matrix=seed_adjacency_matrix
+            verbose=True,
+            weighted_parameters=weighted_parameters if is_weighted else None,
+            seed_weight_matrix=seed_weighted_network
             )
 
     # Run the model
     run_model = model.run_model()
 
+    #####NEW#####
+    # Unpack the run_model output ----------
+    adjacency_snapshots = run_model[1]
+    weight_snapshots = run_model[2]  ########## Optional: only if weighted model is used
+
+    # Save raw matrices from the model ----------
+    # Convert to NumPy
+    adjacency_numpy = [snap.numpy() for snap in adjacency_snapshots]
+
+    if weight_snapshots is not None:
+        weight_numpy = [snap.numpy() for snap in weight_snapshots]
+    else:
+        weight_numpy = None
+
+    # Save raw model outputs
+    raw_output = {
+        'adjacency_snapshots': adjacency_numpy,
+        'weight_snapshots': weight_numpy
+    }
+
+    if output_filepath:
+        np.save(f'{output_filepath}/raw_model_outputs.npy', raw_output)
+
+    #############
+    """
     # Averaging across runs ----------
     # Initialize a list to store the averaged matrices
     averaged_matrices = []
 
-    # Iterate through each element in t0_t1_model[0]
+    # Iterate through each element in model
     for element in run_model[1]:
         # Convert the element to a NumPy array if it's a tensor
         matrices = element.numpy()  # Assuming each element contains multiple matrices
@@ -255,6 +361,7 @@ def model(optimal_results, lambdah_value, num_simulations, seed_binary_network, 
     # Save the model to a pickle file
     with open(f'{output_filepath}/model.pkl', 'wb') as f:
         pickle.dump(model, f)
+    """
 
 def analyse_model(averaged_matrices, output_filepath=None):
     """
@@ -268,8 +375,11 @@ def analyse_model(averaged_matrices, output_filepath=None):
     # Ensure the output directory exists
     os.makedirs(output_filepath, exist_ok=True)
 
-    # Visualize all averaged matrices
-    num_matrices = len(averaged_matrices)
+    # Visualize every 5th averaged matrix
+    step = 5  # Visualize every 5th connection
+    selected_matrices = averaged_matrices[::step]  # Select every 5th matrix
+
+    num_matrices = len(selected_matrices)
     cols = 5  # Number of columns for the grid
     rows = (num_matrices + cols - 1) // cols  # Calculate rows for the grid
 
@@ -280,22 +390,22 @@ def analyse_model(averaged_matrices, output_filepath=None):
     for i, ax in enumerate(axes):
         if i < num_matrices:
             sns.heatmap(
-                averaged_matrices[i],
+                selected_matrices[i],
                 cmap='viridis',
                 cbar=(i == 0),  # Only show the colorbar for the first plot
                 ax=ax
             )
-            ax.set_title(f'Connection {i}', fontsize=12)
+            ax.set_title(f'Connection {(i * step) + 1}', fontsize=12)  # Adjust title to reflect the skipped indices
             if i == 0:
                 # Customize the first plot with axis labels and colorbar
                 num_labels = 4
-                ax.set_xticks(np.linspace(0, averaged_matrices[i].shape[1] - 1, num_labels))
-                ax.set_yticks(np.linspace(0, averaged_matrices[i].shape[0] - 1, num_labels))
-                ax.set_xticklabels(np.linspace(0, averaged_matrices[i].shape[1] - 1, num_labels, dtype=int), fontsize=10)
-                ax.set_yticklabels(np.linspace(0, averaged_matrices[i].shape[0] - 1, num_labels, dtype=int), fontsize=10)
+                ax.set_xticks(np.linspace(0, selected_matrices[i].shape[1] - 1, num_labels))
+                ax.set_yticks(np.linspace(0, selected_matrices[i].shape[0] - 1, num_labels))
+                ax.set_xticklabels(np.linspace(0, selected_matrices[i].shape[1] - 1, num_labels, dtype=int), fontsize=10)
+                ax.set_yticklabels(np.linspace(0, selected_matrices[i].shape[0] - 1, num_labels, dtype=int), fontsize=10)
                 colorbar = ax.collections[0].colorbar
-                colorbar.set_ticks([averaged_matrices[i].min(), averaged_matrices[i].max()])
-                colorbar.set_ticklabels([f'{averaged_matrices[i].min():.2f}', f'{averaged_matrices[i].max():.2f}'])
+                colorbar.set_ticks([selected_matrices[i].min(), selected_matrices[i].max()])
+                colorbar.set_ticklabels([f'{selected_matrices[i].min():.2f}', f'{selected_matrices[i].max():.2f}'])
             else:
                 ax.set_xticks([])
                 ax.set_yticks([])
@@ -395,6 +505,10 @@ def analyse_model(averaged_matrices, output_filepath=None):
 os.chdir('/imaging/astle/er05')
 pickle_dir = '/imaging/astle/er05/Organoid project scripts/Output/processed_data.pkl'
 
+# Ensure the pickle directory exists
+if not os.path.exists(os.path.dirname(pickle_dir)):
+    os.makedirs(os.path.dirname(pickle_dir))
+
 # Initialise lists
 slice_data = []
 modelling_data = []  # Keep this as a list
@@ -414,7 +528,10 @@ for slice in slice_data:
         # Extract the adjacency matrix and distance matrix
         adjM = slice['adjM']
         dij = slice['dij']
-        
+
+        # Ensure the adjacency matrix is non-negative
+        adjM = np.maximum(adjM, 0)  # Replace negative values with 0
+
         # Threshold the adjacency matrix to retain the top 5% strongest connections
         adjM_thresholded = bct.threshold_proportional(adjM, 0.05)
         
@@ -430,11 +547,12 @@ for slice in slice_data:
         binary_adjM_thresholded = (adjM_thresholded > 0).astype(int) ########## Remove when changing to weighted
 
         # Convert matrices to PyTorch tensors
-        weighted_network = torch.tensor(adjM, dtype=torch.float)
+        weighted_network = torch.tensor(adjM_thresholded, dtype=torch.float)
         weighted_network = weighted_network.unsqueeze(0)
-        binary_network = torch.tensor(adjM_thresholded, dtype=torch.float)
+        binary_network = torch.tensor(binary_adjM_thresholded, dtype=torch.float)
         binary_network = binary_network.unsqueeze(0)
         distance_matrix = torch.tensor(dij, dtype=torch.float)
+        distance_matrix = distance_matrix.unsqueeze(0)
         
         # Add the data to the modelling_data list
         modelling_data.append({
@@ -455,11 +573,15 @@ gamma_values = torch.linspace(-5, 1.7, 10) ########## increase when testing larg
 lambdah_value = 2.0  # Fixed lambda
 
 # Number of networks to generate per parameter combination
-num_simulations = 2 ########## increase when testing large parameterspace
+num_simulations = 4 ########## increase when testing large parameterspace
 
 # %% t0-t1 Parameter Sweep --------------------------------------------------
 # Set output
 t0_t1_sweep_filepath='/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Parameter sweeps/t0_t1'
+
+# Ensure the directory exists
+if not os.path.exists(t0_t1_sweep_filepath):
+    os.makedirs(t0_t1_sweep_filepath)
 
 # Parameter sweep
 t0_t1_results, t0_t1_optimal_results = parameter_sweep(
@@ -467,44 +589,58 @@ t0_t1_results, t0_t1_optimal_results = parameter_sweep(
     gamma_values=gamma_values,
     lambdah_value=lambdah_value,
     num_simulations=num_simulations,
-    #seed_binary_network=None,
     seed_weighted_network=None,
-    weighted_network=modelling_data[0]['weighted_network'], ########## keep if weighted
-    #binary_network=modelling_data[0]['binary_network'], ########## keep if binary
-    distance_matrix=modelling_data[0]['distance_matrix'],
-    num_nodes=modelling_data[0]['num_nodes'],
-    num_connections=modelling_data[0]['num_connections'],
-    output_filepath=t0_t1_sweep_filepath
-    )
-
-# Plot energy landscape
-plot_energy_landscape(results=t0_t1_results, title='t0 → t1 Energy Landscape', output_filepath=t0_t1_sweep_filepath)
-
-
-# %% t0-t1 Model --------------------------------------------------
-# Load the optimal results into a DataFrame
-t0_t1_sweep_filepath='/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Parameter sweeps/t0_t1'
-t0_t1_results = pd.read_csv(f'{t0_t1_sweep_filepath}/optimal_parameters.csv')
-
-t0_t1_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t0_t1'
-
-# Create the model
-t0_t1_model = model(
-    optimal_results=t0_t1_results,
-    lambdah_value=lambdah_value,
-    num_simulations=num_simulations,
     seed_binary_network=None,
+    weighted_network=modelling_data[0]['weighted_network'],
     binary_network=modelling_data[0]['binary_network'],
     distance_matrix=modelling_data[0]['distance_matrix'],
     num_nodes=modelling_data[0]['num_nodes'],
     num_connections=modelling_data[0]['num_connections'],
-    output_filepath=t0_t1_model_filepath)
+    output_filepath=t0_t1_sweep_filepath
+)
+
+# Plot energy landscape
+plot_energy_landscape(
+    results=t0_t1_results,
+    title='t0 → t1 Energy Landscape',
+    output_filepath=t0_t1_sweep_filepath
+    )
+    
+
+# %% t0-t1 Model --------------------------------------------------
+# Load the optimal results into a DataFrame
+t0_t1_sweep_filepath='/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Parameter sweeps/t0_t1'
+t0_t1_optimal_results = pd.read_csv(f'{t0_t1_sweep_filepath}/optimal_parameters.csv')
+
+t0_t1_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t0_t1'
+
+# Ensure the directory exists
+if not os.path.exists(t0_t1_model_filepath):
+    os.makedirs(t0_t1_model_filepath)
+
+# Create the model
+t0_t1_model = model(
+    optimal_results=t0_t1_optimal_results,
+    num_simulations=num_simulations,
+    distance_matrix=modelling_data[0]['distance_matrix'],
+    num_connections=modelling_data[0]['num_connections'],
+    num_nodes=modelling_data[0]['num_nodes'],
+    seed_binary_network=None,
+    seed_weighted_network=None,
+    binary_network=modelling_data[0]['binary_network'],
+    weighted_network=modelling_data[0]['weighted_network'],
+    output_filepath=t0_t1_model_filepath
+    )
 
 
 # %% t0-t1 Assess Model --------------------------------------------------
 # Load the model's averaged matrices
 t0_t1_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t0_t1'
 t0_t1_averaged_matrices = np.load(f'{t0_t1_model_filepath}/averaged_matrices.npy')
+
+# Load the model
+with open(f'{t0_t1_model_filepath}/model.pkl', 'rb') as f:
+    t0_t1_model = pickle.load(f)
 
 # Analyse the t0-t1 model
 analyse_model(averaged_matrices=t0_t1_averaged_matrices, output_filepath=t0_t1_model_filepath)
@@ -518,17 +654,21 @@ t0_t1_averaged_matrices = np.load(f'{t0_t1_model_filepath}/averaged_matrices.npy
 # Get last timepoint from t0-t1 model
 simulated_t1 = t0_t1_averaged_matrices[-1]
 
-# Threshold the adjacency matrix to retain the top 5% strongest connections
-simulated_t1 = bct.threshold_proportional(simulated_t1, 0.05)
-
 # Binarise
-simulated_t1 = (simulated_t1 > 0).astype(int)  ########## Remove when changing to weighted
+simulated_t1_binary = (simulated_t1 > 0).astype(int)
 
 # Convert to PyTorch tensor
 simulated_t1 = torch.tensor(simulated_t1, dtype=torch.float)
+simulated_t1 = simulated_t1.unsqueeze(0)
+simulated_t1_binary = torch.tensor(simulated_t1_binary, dtype=torch.float)
+simulated_t1_binary = simulated_t1_binary.unsqueeze(0)
 
 # Set output
 t1_t2_sweep_filepath='/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Parameter sweeps/t1_t2'
+
+# Ensure the directory exists
+if not os.path.exists(t1_t2_sweep_filepath):
+    os.makedirs(t1_t2_sweep_filepath)
 
 # Parameter sweep
 t1_t2_results, t1_t2_optimal_results = parameter_sweep(
@@ -536,7 +676,9 @@ t1_t2_results, t1_t2_optimal_results = parameter_sweep(
     gamma_values=gamma_values,
     lambdah_value=lambdah_value,
     num_simulations=num_simulations,
-    seed_binary_network=simulated_t1,
+    seed_weighted_network=simulated_t1,
+    seed_binary_network=simulated_t1_binary,
+    weighted_network=modelling_data[1]['weighted_network'],
     binary_network=modelling_data[1]['binary_network'],
     distance_matrix=modelling_data[1]['distance_matrix'],
     num_nodes=modelling_data[1]['num_nodes'],
@@ -555,16 +697,21 @@ t1_t2_results = pd.read_csv(f'{t1_t2_sweep_filepath}/optimal_parameters.csv')
 
 t1_t2_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t1_t2'
 
+# Ensure the directory exists
+if not os.path.exists(t1_t2_model_filepath):
+    os.makedirs(t1_t2_model_filepath)
+
 # Create the model
 t1_t2_model = model(
     optimal_results=t1_t2_results,
-    lambdah_value=lambdah_value,
     num_simulations=num_simulations,
-    seed_binary_network=simulated_t1,
-    binary_network=modelling_data[1]['binary_network'],
     distance_matrix=modelling_data[1]['distance_matrix'],
-    num_nodes=modelling_data[1]['num_nodes'],
     num_connections=modelling_data[1]['num_connections'],
+    num_nodes=modelling_data[1]['num_nodes'],
+    seed_binary_network=simulated_t1_binary,
+    seed_weighted_network=simulated_t1,
+    binary_network=modelling_data[1]['binary_network'],
+    weighted_network=modelling_data[1]['weighted_network'],
     output_filepath=t1_t2_model_filepath
     )
 
@@ -586,17 +733,15 @@ t1_t2_averaged_matrices = np.load(f'{t1_t2_model_filepath}/averaged_matrices.npy
 # Get last timepoint from t0-t1 model
 simulated_t2 = t1_t2_averaged_matrices[-1]
 
-# Threshold the adjacency matrix to retain the top 5% strongest connections
-simulated_t2 = bct.threshold_proportional(simulated_t2, 0.05)
-
-# Binarise
-simulated_t2 = (simulated_t2 > 0).astype(int)  ########## Remove when changing to weighted
-
 # Convert to PyTorch tensor
 simulated_t2 = torch.tensor(simulated_t2, dtype=torch.float)
 
 # Set output
 t2_t3_sweep_filepath='/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Parameter sweeps/t2_t3'
+
+# Ensure the directory exists
+if not os.path.exists(t2_t3_sweep_filepath):
+    os.makedirs(t2_t3_sweep_filepath)
 
 # Parameter sweep
 t2_t3_results, t2_t3_optimal_results = parameter_sweep(
@@ -622,6 +767,10 @@ t2_t3_sweep_filepath='/imaging/astle/er05/Organoid project scripts/Output/Chimpa
 t2_t3_results = pd.read_csv(f'{t2_t3_sweep_filepath}/optimal_parameters.csv')
 
 t2_t3_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t2_t3'
+
+# Ensure the directory exists
+if not os.path.exists(t2_t3_model_filepath):
+    os.makedirs(t2_t3_model_filepath)
 
 # Create the model
 t2_t3_model = model(
