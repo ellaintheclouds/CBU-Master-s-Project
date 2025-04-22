@@ -37,12 +37,12 @@ def parameter_sweep(
     weighted_network=None,
     binary_network=None,
     output_filepath=None
-):
+): 
     # Determine mode ----------
     is_weighted = weighted_network is not None
 
     # Print what mode is being used
-    print(f"Running parameter sweep in {'weighted' if is_weighted else 'binary'} mode.")
+    print(f'Running parameter sweep in {'weighted' if is_weighted else 'binary'} mode.')
 
     # Set up sweep parameters ----------
     # Weighted mode
@@ -221,9 +221,9 @@ def plot_energy_landscape(
 
     # Explicitly set tick positions to align with the edges
     ax.set_xticks([0.5, len(energy_grid.columns) - 0.5])  # Tick positions at the edges
-    ax.set_xticklabels([f"{energy_grid.columns[0]:.2f}", f"{energy_grid.columns[-1]:.2f}"], fontsize=10)
+    ax.set_xticklabels([f'{energy_grid.columns[0]:.2f}', f'{energy_grid.columns[-1]:.2f}'], fontsize=10)
     ax.set_yticks([0.5, len(energy_grid.index) - 0.5])  # Tick positions at the edges
-    ax.set_yticklabels([f"{energy_grid.index[0]:.2f}", f"{energy_grid.index[-1]:.2f}"], fontsize=10)
+    ax.set_yticklabels([f'{energy_grid.index[0]:.2f}', f'{energy_grid.index[-1]:.2f}'], fontsize=10)
 
     # Adjust axis limits to ensure ticks are flush with the edges
     ax.set_xlim(0, len(energy_grid.columns))  # Align x-axis ticks with edges
@@ -253,7 +253,7 @@ def model(
     is_weighted = weighted_network is not None
 
     # Print what mode is being used
-    print(f"Running model in {'weighted' if is_weighted else 'binary'} mode.")
+    print(f'Running model in {'weighted' if is_weighted else 'binary'} mode.')
 
     # Set up sweep parameters ----------
     # Weighted mode
@@ -281,20 +281,8 @@ def model(
         binary_updates_per_iteration=1
         )
 
-    if seed_binary_network is not None:
-        # Repeat the 50x50 matrix along the first dimension to match num_simulations ########## remove if I use the real 4 matrices to seed instead of an averaged matrix
-        seed_binary_network = seed_binary_network.repeat(num_simulations, 1, 1)  # Shape becomes (4, 50, 50) ########## remove if I use the real 4 matrices to seed instead of an averaged matrix
-
-        print("Size of seed binary network:", seed_binary_network.shape)  ########## Debugging line
-
-    if seed_weighted_network is not None:
-        # Repeat the 50x50 matrix along the first dimension to match num_simulations ########## remove if I use the real 4 matrices to seed instead of an averaged matrix
-        seed_weighted_network = seed_weighted_network.repeat(num_simulations, 1, 1) # Shape becomes (4, 50, 50) ########## remove if I use the real 4 matrices to seed instead of an averaged matrix
-
-    # Repeat the 50x50 matrix along the first dimension to match num_simulations ########## remove if I use the real 4 matrices to seed instead of an averaged matrix
-    distance_matrix = distance_matrix.repeat(num_simulations, 1, 1)  # Shape becomes (4, 50, 50) ########## remove if I use the real 4 matrices to seed instead of an averaged matrix
-
-    print("Size of distance matrix:", distance_matrix.shape)  ########## Debugging line
+    # Repeat the dij along the first dimension to match num_simulations
+    distance_matrix = distance_matrix.repeat(num_simulations, 1, 1)
 
     # Define the model
     model = gnm.GenerativeNetworkModel(
@@ -311,10 +299,9 @@ def model(
     # Run the model
     run_model = model.run_model()
 
-    #####NEW#####
     # Unpack the run_model output ----------
     adjacency_snapshots = run_model[1]
-    weight_snapshots = run_model[2]  ########## Optional: only if weighted model is used
+    weight_snapshots = run_model[2]
 
     # Save raw matrices from the model ----------
     # Convert to NumPy
@@ -334,171 +321,271 @@ def model(
     if output_filepath:
         np.save(f'{output_filepath}/raw_model_outputs.npy', raw_output)
 
-    #############
-    """
-    # Averaging across runs ----------
-    # Initialize a list to store the averaged matrices
-    averaged_matrices = []
+def analyse_model(matrices, output_filepath=None):
+    # Ensure the output directory exists
+    os.makedirs(output_filepath, exist_ok=True)
 
-    # Iterate through each element in model
-    for element in run_model[1]:
-        # Convert the element to a NumPy array if it's a tensor
-        matrices = element.numpy()  # Assuming each element contains multiple matrices
+    # Iterate through different runs
+    for idx in range(len(matrices[0])):
+        # Print the current version being analysed
+        print(f'Analysing version {idx + 1} of {len(matrices[0])}')
 
-        # Compute the element-wise mean across all matrices
-        avg_matrix = matrices.mean(axis=0)  # Average along the first axis
+        # Extract matrix_series: all timepoints for the current version
+        matrix_series = [timepoint[idx] for timepoint in matrices]
 
-        # Append the averaged matrix to the list
-        averaged_matrices.append(avg_matrix)
+        # Visualize every 5th averaged matrix
+        step = 5  # Visualize every 5th connection
+        selected_matrices = matrix_series[::step] # Select every 5th matrix
 
-    # Save the averaged matrices as a NumPy array
-    averaged_matrices = np.array(averaged_matrices)
+        num_matrices = len(selected_matrices)
+        cols = 5  # Number of columns for the grid
+        rows = (num_matrices + cols - 1) // cols # Calculate rows for the grid
 
-    # Save the averaged matrices
-    if output_filepath:
-        np.save(f'{output_filepath}/averaged_matrices.npy', averaged_matrices)
+        # Create the figure with subplots
+        fig, axes = plt.subplots(rows, cols, figsize=(25, 5 * rows))
+        axes = axes.flatten()
 
-    # Save the model to a pickle file
-    with open(f'{output_filepath}/model.pkl', 'wb') as f:
-        pickle.dump(model, f)
-    """
+        for i, ax in enumerate(axes):
+            if i < num_matrices:
+                sns.heatmap(
+                    selected_matrices[i],
+                    cmap='viridis',
+                    cbar=(i == 0), # Only show the colorbar for the first plot
+                    ax=ax
+                )
+                ax.set_title(f'Connection {(i * step) + 1}', fontsize=12)  # Adjust title to reflect the skipped indices
+                if i == 0:
+                    # Customize the first plot with axis labels and colorbar
+                    num_labels = 4
+                    ax.set_xticks(np.linspace(0, selected_matrices[i].shape[1] - 1, num_labels))
+                    ax.set_yticks(np.linspace(0, selected_matrices[i].shape[0] - 1, num_labels))
+                    ax.set_xticklabels(np.linspace(0, selected_matrices[i].shape[1] - 1, num_labels, dtype=int), fontsize=10)
+                    ax.set_yticklabels(np.linspace(0, selected_matrices[i].shape[0] - 1, num_labels, dtype=int), fontsize=10)
+                    colorbar = ax.collections[0].colorbar
+                    colorbar.set_ticks([selected_matrices[i].min(), selected_matrices[i].max()])
+                    colorbar.set_ticklabels([f'{selected_matrices[i].min():.2f}', f'{selected_matrices[i].max():.2f}'])
+                else:
+                    ax.set_xticks([])
+                    ax.set_yticks([])
+            else:
+                ax.axis('off')
 
-def analyse_model(averaged_matrices, output_filepath=None):
-    """
-    Analyses a model by visualizing averaged matrices, computing graph metrics, 
-    and saving distributions and a correlation heatmap to the specified filepath.
+        # Save the averaged matrices plot
+        fig.tight_layout(pad=3.0)
+        plt.savefig(f'{output_filepath}/version_{idx}_matrix_growth.png', dpi=300)
+        plt.close(fig)
 
-    Parameters:
-        averaged_matrices (np.ndarray): Averaged matrices from the model.
-        output_filepath (str): Filepath for saving the plots.
+        # Analyse the final simulated timepoint
+        sim_adjm = matrix_series[-1]
+
+        # Compute graph metrics
+        degree = np.sum(sim_adjm != 0, axis=0)
+        total_edge_length = np.sum(sim_adjm, axis=0)
+        clustering = bct.clustering_coef_bu(sim_adjm)
+        betweenness = bct.betweenness_wei(1 / (sim_adjm + np.finfo(float).eps))
+        efficiency = bct.efficiency_wei(sim_adjm, local=True)
+
+        # Compute matching index
+        N = sim_adjm.shape[0]
+        matching_matrix = np.zeros((N, N))
+        for i in range(N):
+            for j in range(N):
+                if i != j:
+                    min_weights = np.minimum(sim_adjm[i, :], sim_adjm[j, :])
+                    max_weights = np.maximum(sim_adjm[i, :], sim_adjm[j, :])
+                    if np.sum(max_weights) > 0:  # Avoid division by zero
+                        matching_matrix[i, j] = np.sum(min_weights) / np.sum(max_weights)
+
+        # Save adjacency matrix plot
+        plt.figure(figsize=(7, 6))
+        ax = sns.heatmap(sim_adjm, cmap='viridis', cbar=True)
+        ax.set_title('Thresholded Adjacency Matrix', fontsize=14)
+        num_labels = 10
+        ax.set_xticks(np.linspace(0, sim_adjm.shape[1] - 1, num_labels))
+        ax.set_yticks(np.linspace(0, sim_adjm.shape[0] - 1, num_labels))
+        ax.set_xticklabels(np.linspace(0, sim_adjm.shape[1] - 1, num_labels, dtype=int))
+        ax.set_yticklabels(np.linspace(0, sim_adjm.shape[0] - 1, num_labels, dtype=int))
+        plt.savefig(f'{output_filepath}/version_{idx}_adjacency_matrix.png', dpi=300)
+        plt.close()
+
+        # Plot graph metrics
+        fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+        font_size = 16
+        tick_size = 14
+        line_color = '#1f77b4'
+
+        sns.kdeplot(degree, color=line_color, ax=axes[0, 0], linewidth=4, alpha=0.7)
+        axes[0, 0].set_xlabel('Degree', fontsize=font_size)
+        axes[0, 0].set_ylabel('Density', fontsize=font_size)
+        axes[0, 0].tick_params(axis='both', labelsize=tick_size)
+
+        sns.kdeplot(total_edge_length, color=line_color, ax=axes[0, 1], linewidth=4, alpha=0.7)
+        axes[0, 1].set_xlabel('Total Edge Length', fontsize=font_size)
+        axes[0, 1].set_ylabel('Density', fontsize=font_size)
+        axes[0, 1].tick_params(axis='both', labelsize=tick_size)
+
+        sns.kdeplot(clustering, color=line_color, ax=axes[1, 0], linewidth=4, alpha=0.7)
+        axes[1, 0].set_xlabel('Clustering Coefficient', fontsize=font_size)
+        axes[1, 0].set_ylabel('Density', fontsize=font_size)
+        axes[1, 0].tick_params(axis='both', labelsize=tick_size)
+
+        sns.kdeplot(betweenness, color=line_color, ax=axes[1, 1], linewidth=4, alpha=0.7)
+        axes[1, 1].set_xlabel('Betweenness Centrality', fontsize=font_size)
+        axes[1, 1].set_ylabel('Density', fontsize=font_size)
+        axes[1, 1].tick_params(axis='both', labelsize=tick_size)
+
+        fig.tight_layout(pad=2.0, w_pad=3.0)
+        plt.savefig(f'{output_filepath}/version_{idx}_graph_metrics.png', dpi=300)
+        plt.close(fig)
+
+        # Compute and save correlation heatmap
+        metrics_df = pd.DataFrame({
+            'degree': degree,
+            'clustering': clustering,
+            'betweenness': betweenness,
+            'total_edge_length': total_edge_length,
+            'efficiency': efficiency,
+            'matching_index': np.mean(matching_matrix, axis=1)
+        })
+        correlation_matrix = metrics_df.corr()
+        formatted_labels = ['Degree', 'Clustering', 'Betweenness', 'Total Edge Length', 'Efficiency', 'Matching Index']
+
+        plt.figure(figsize=(8, 6))
+        ax = sns.heatmap(correlation_matrix, cmap='RdBu_r', xticklabels=formatted_labels, yticklabels=formatted_labels, center=0, cbar=True)
+        ax.set_title('Topological Fingerprint Heatmap', fontsize=14)
+        ax.tick_params(axis='both', which='major', labelsize=10)
+        plt.savefig(f'{output_filepath}/version_{idx}_correlation_heatmap.png', dpi=300)
+        plt.close()
+
     """
     # Ensure the output directory exists
     os.makedirs(output_filepath, exist_ok=True)
 
-    # Visualize every 5th averaged matrix
-    step = 5  # Visualize every 5th connection
-    selected_matrices = averaged_matrices[::step]  # Select every 5th matrix
+    for idx, matrix in enumerate(matrices):
+        # Visualize every 5th averaged matrix
+        step = 5  # Visualize every 5th connection
+        selected_matrices = matrix[::step]  # Select every 5th matrix
 
-    num_matrices = len(selected_matrices)
-    cols = 5  # Number of columns for the grid
-    rows = (num_matrices + cols - 1) // cols  # Calculate rows for the grid
+        num_matrices = len(selected_matrices)
+        cols = 5  # Number of columns for the grid
+        rows = (num_matrices + cols - 1) // cols  # Calculate rows for the grid
 
-    # Create the figure with subplots
-    fig, axes = plt.subplots(rows, cols, figsize=(25, 5 * rows))  # Widen the figure for square plots
-    axes = axes.flatten()
+        # Create the figure with subplots
+        fig, axes = plt.subplots(rows, cols, figsize=(25, 5 * rows))  # Widen the figure for square plots
+        axes = axes.flatten()
 
-    for i, ax in enumerate(axes):
-        if i < num_matrices:
-            sns.heatmap(
-                selected_matrices[i],
-                cmap='viridis',
-                cbar=(i == 0),  # Only show the colorbar for the first plot
-                ax=ax
-            )
-            ax.set_title(f'Connection {(i * step) + 1}', fontsize=12)  # Adjust title to reflect the skipped indices
-            if i == 0:
-                # Customize the first plot with axis labels and colorbar
-                num_labels = 4
-                ax.set_xticks(np.linspace(0, selected_matrices[i].shape[1] - 1, num_labels))
-                ax.set_yticks(np.linspace(0, selected_matrices[i].shape[0] - 1, num_labels))
-                ax.set_xticklabels(np.linspace(0, selected_matrices[i].shape[1] - 1, num_labels, dtype=int), fontsize=10)
-                ax.set_yticklabels(np.linspace(0, selected_matrices[i].shape[0] - 1, num_labels, dtype=int), fontsize=10)
-                colorbar = ax.collections[0].colorbar
-                colorbar.set_ticks([selected_matrices[i].min(), selected_matrices[i].max()])
-                colorbar.set_ticklabels([f'{selected_matrices[i].min():.2f}', f'{selected_matrices[i].max():.2f}'])
+        for i, ax in enumerate(axes):
+            if i < num_matrices:
+                sns.heatmap(
+                    selected_matrices[i],
+                    cmap='viridis',
+                    cbar=(i == 0),  # Only show the colorbar for the first plot
+                    ax=ax
+                )
+                ax.set_title(f'Connection {(i * step) + 1}', fontsize=12)  # Adjust title to reflect the skipped indices
+                if i == 0:
+                    # Customize the first plot with axis labels and colorbar
+                    num_labels = 4
+                    ax.set_xticks(np.linspace(0, selected_matrices[i].shape[1] - 1, num_labels))
+                    ax.set_yticks(np.linspace(0, selected_matrices[i].shape[0] - 1, num_labels))
+                    ax.set_xticklabels(np.linspace(0, selected_matrices[i].shape[1] - 1, num_labels, dtype=int), fontsize=10)
+                    ax.set_yticklabels(np.linspace(0, selected_matrices[i].shape[0] - 1, num_labels, dtype=int), fontsize=10)
+                    colorbar = ax.collections[0].colorbar
+                    colorbar.set_ticks([selected_matrices[i].min(), selected_matrices[i].max()])
+                    colorbar.set_ticklabels([f'{selected_matrices[i].min():.2f}', f'{selected_matrices[i].max():.2f}'])
+                else:
+                    ax.set_xticks([])
+                    ax.set_yticks([])
             else:
-                ax.set_xticks([])
-                ax.set_yticks([])
-        else:
-            ax.axis('off')
+                ax.axis('off')
 
-    # Save the averaged matrices plot
-    fig.tight_layout(pad=3.0)
-    plt.savefig(f'{output_filepath}/averaged_matrices.png', dpi=300)
-    plt.close(fig)
+        # Save the averaged matrices plot
+        fig.tight_layout(pad=3.0)
+        plt.savefig(f'{output_filepath}/{idx} matrix_growth.png', dpi=300)
+        plt.close(fig)
 
-    # Analyse the final simulated timepoint
-    sim_adjm = averaged_matrices[-1]
+        # Analyse the final simulated timepoint
+        sim_adjm = matrix[-1]
 
-    # Compute graph metrics
-    degree = np.sum(sim_adjm != 0, axis=0)
-    total_edge_length = np.sum(sim_adjm, axis=0)
-    clustering = bct.clustering_coef_bu(sim_adjm)
-    betweenness = bct.betweenness_wei(1 / (sim_adjm + np.finfo(float).eps))
-    efficiency = bct.efficiency_wei(sim_adjm, local=True)
+        # Compute graph metrics
+        degree = np.sum(sim_adjm != 0, axis=0)
+        total_edge_length = np.sum(sim_adjm, axis=0)
+        clustering = bct.clustering_coef_bu(sim_adjm)
+        betweenness = bct.betweenness_wei(1 / (sim_adjm + np.finfo(float).eps))
+        efficiency = bct.efficiency_wei(sim_adjm, local=True)
 
-    # Compute matching index
-    N = sim_adjm.shape[0]
-    matching_matrix = np.zeros((N, N))
-    for i in range(N):
-        for j in range(N):
-            if i != j:
-                min_weights = np.minimum(sim_adjm[i, :], sim_adjm[j, :])
-                max_weights = np.maximum(sim_adjm[i, :], sim_adjm[j, :])
-                if np.sum(max_weights) > 0:  # Avoid division by zero
-                    matching_matrix[i, j] = np.sum(min_weights) / np.sum(max_weights)
+        # Compute matching index
+        N = sim_adjm.shape[0]
+        matching_matrix = np.zeros((N, N))
+        for i in range(N):
+            for j in range(N):
+                if i != j:
+                    min_weights = np.minimum(sim_adjm[i, :], sim_adjm[j, :])
+                    max_weights = np.maximum(sim_adjm[i, :], sim_adjm[j, :])
+                    if np.sum(max_weights) > 0:  # Avoid division by zero
+                        matching_matrix[i, j] = np.sum(min_weights) / np.sum(max_weights)
 
-    # Save adjacency matrix plot
-    plt.figure(figsize=(7, 6))
-    ax = sns.heatmap(sim_adjm, cmap='viridis', cbar=True)
-    ax.set_title('Thresholded Adjacency Matrix', fontsize=14)
-    num_labels = 10
-    ax.set_xticks(np.linspace(0, sim_adjm.shape[1] - 1, num_labels))
-    ax.set_yticks(np.linspace(0, sim_adjm.shape[0] - 1, num_labels))
-    ax.set_xticklabels(np.linspace(0, sim_adjm.shape[1] - 1, num_labels, dtype=int))
-    ax.set_yticklabels(np.linspace(0, sim_adjm.shape[0] - 1, num_labels, dtype=int))
-    plt.savefig(f'{output_filepath}/adjacency_matrix.png', dpi=300)
-    plt.close()
+        # Save adjacency matrix plot
+        plt.figure(figsize=(7, 6))
+        ax = sns.heatmap(sim_adjm, cmap='viridis', cbar=True)
+        ax.set_title('Thresholded Adjacency Matrix', fontsize=14)
+        num_labels = 10
+        ax.set_xticks(np.linspace(0, sim_adjm.shape[1] - 1, num_labels))
+        ax.set_yticks(np.linspace(0, sim_adjm.shape[0] - 1, num_labels))
+        ax.set_xticklabels(np.linspace(0, sim_adjm.shape[1] - 1, num_labels, dtype=int))
+        ax.set_yticklabels(np.linspace(0, sim_adjm.shape[0] - 1, num_labels, dtype=int))
+        plt.savefig(f'{output_filepath}/{idx} adjacency_matrix.png', dpi=300)
+        plt.close()
 
-    # Plot graph metrics
-    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
-    font_size = 16
-    tick_size = 14
-    line_color = '#1f77b4'
+        # Plot graph metrics
+        fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+        font_size = 16
+        tick_size = 14
+        line_color = '#1f77b4'
 
-    sns.kdeplot(degree, color=line_color, ax=axes[0, 0], linewidth=4, alpha=0.7)
-    axes[0, 0].set_xlabel('Degree', fontsize=font_size)
-    axes[0, 0].set_ylabel('Density', fontsize=font_size)
-    axes[0, 0].tick_params(axis='both', labelsize=tick_size)
+        sns.kdeplot(degree, color=line_color, ax=axes[0, 0], linewidth=4, alpha=0.7)
+        axes[0, 0].set_xlabel('Degree', fontsize=font_size)
+        axes[0, 0].set_ylabel('Density', fontsize=font_size)
+        axes[0, 0].tick_params(axis='both', labelsize=tick_size)
 
-    sns.kdeplot(total_edge_length, color=line_color, ax=axes[0, 1], linewidth=4, alpha=0.7)
-    axes[0, 1].set_xlabel('Total Edge Length', fontsize=font_size)
-    axes[0, 1].set_ylabel('Density', fontsize=font_size)
-    axes[0, 1].tick_params(axis='both', labelsize=tick_size)
+        sns.kdeplot(total_edge_length, color=line_color, ax=axes[0, 1], linewidth=4, alpha=0.7)
+        axes[0, 1].set_xlabel('Total Edge Length', fontsize=font_size)
+        axes[0, 1].set_ylabel('Density', fontsize=font_size)
+        axes[0, 1].tick_params(axis='both', labelsize=tick_size)
 
-    sns.kdeplot(clustering, color=line_color, ax=axes[1, 0], linewidth=4, alpha=0.7)
-    axes[1, 0].set_xlabel('Clustering Coefficient', fontsize=font_size)
-    axes[1, 0].set_ylabel('Density', fontsize=font_size)
-    axes[1, 0].tick_params(axis='both', labelsize=tick_size)
+        sns.kdeplot(clustering, color=line_color, ax=axes[1, 0], linewidth=4, alpha=0.7)
+        axes[1, 0].set_xlabel('Clustering Coefficient', fontsize=font_size)
+        axes[1, 0].set_ylabel('Density', fontsize=font_size)
+        axes[1, 0].tick_params(axis='both', labelsize=tick_size)
 
-    sns.kdeplot(betweenness, color=line_color, ax=axes[1, 1], linewidth=4, alpha=0.7)
-    axes[1, 1].set_xlabel('Betweenness Centrality', fontsize=font_size)
-    axes[1, 1].set_ylabel('Density', fontsize=font_size)
-    axes[1, 1].tick_params(axis='both', labelsize=tick_size)
+        sns.kdeplot(betweenness, color=line_color, ax=axes[1, 1], linewidth=4, alpha=0.7)
+        axes[1, 1].set_xlabel('Betweenness Centrality', fontsize=font_size)
+        axes[1, 1].set_ylabel('Density', fontsize=font_size)
+        axes[1, 1].tick_params(axis='both', labelsize=tick_size)
 
-    fig.tight_layout(pad=2.0, w_pad=3.0)
-    plt.savefig(f'{output_filepath}/graph_metrics.png', dpi=300)
-    plt.close(fig)
+        fig.tight_layout(pad=2.0, w_pad=3.0)
+        plt.savefig(f'{output_filepath}/{idx} graph_metrics.png', dpi=300)
+        plt.close(fig)
 
-    # Compute and save correlation heatmap
-    metrics_df = pd.DataFrame({
-        'degree': degree,
-        'clustering': clustering,
-        'betweenness': betweenness,
-        'total_edge_length': total_edge_length,
-        'efficiency': efficiency,
-        'matching_index': np.mean(matching_matrix, axis=1)
-    })
-    correlation_matrix = metrics_df.corr()
-    formatted_labels = ['Degree', 'Clustering', 'Betweenness', 'Total Edge Length', 'Efficiency', 'Matching Index']
+        # Compute and save correlation heatmap
+        metrics_df = pd.DataFrame({
+            'degree': degree,
+            'clustering': clustering,
+            'betweenness': betweenness,
+            'total_edge_length': total_edge_length,
+            'efficiency': efficiency,
+            'matching_index': np.mean(matching_matrix, axis=1)
+        })
+        correlation_matrix = metrics_df.corr()
+        formatted_labels = ['Degree', 'Clustering', 'Betweenness', 'Total Edge Length', 'Efficiency', 'Matching Index']
 
-    plt.figure(figsize=(8, 6))
-    ax = sns.heatmap(correlation_matrix, cmap='RdBu_r', xticklabels=formatted_labels, yticklabels=formatted_labels, center=0, cbar=True)
-    ax.set_title('Topological Fingerprint Heatmap', fontsize=14)
-    ax.tick_params(axis='both', which='major', labelsize=10)
-    plt.savefig(f'{output_filepath}/correlation_heatmap.png', dpi=300)
-    plt.close()
-
+        plt.figure(figsize=(8, 6))
+        ax = sns.heatmap(correlation_matrix, cmap='RdBu_r', xticklabels=formatted_labels, yticklabels=formatted_labels, center=0, cbar=True)
+        ax.set_title('Topological Fingerprint Heatmap', fontsize=14)
+        ax.tick_params(axis='both', which='major', labelsize=10)
+        plt.savefig(f'{output_filepath}/{idx} correlation_heatmap.png', dpi=300)
+        plt.close()
+        """
 
 # %% Load and Process Data --------------------------------------------------
 # Set working directory
@@ -634,32 +721,28 @@ t0_t1_model = model(
 
 
 # %% t0-t1 Assess Model --------------------------------------------------
-# Load the model's averaged matrices
+# Load the raw model outputs
 t0_t1_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t0_t1'
-t0_t1_averaged_matrices = np.load(f'{t0_t1_model_filepath}/averaged_matrices.npy')
+t0_t1_matrices = np.load(f'{t0_t1_model_filepath}/raw_model_outputs.npy', allow_pickle=True).item()
 
-# Load the model
-with open(f'{t0_t1_model_filepath}/model.pkl', 'rb') as f:
-    t0_t1_model = pickle.load(f)
+# Extract weight snapshots
+weight_snapshots = t0_t1_matrices['weight_snapshots']
 
 # Analyse the t0-t1 model
-analyse_model(averaged_matrices=t0_t1_averaged_matrices, output_filepath=t0_t1_model_filepath)
+analyse_model(matrices=weight_snapshots, output_filepath=t0_t1_model_filepath)
 
 
 # %% t1-t2 Parameter Sweep --------------------------------------------------
-# Load the model's averaged matrices
+# Load the model's averaged matrices for seed
 t0_t1_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t0_t1'
-t0_t1_averaged_matrices = np.load(f'{t0_t1_model_filepath}/averaged_matrices.npy')
+t0_t1_matrices = np.load(f'{t0_t1_model_filepath}/raw_model_outputs.npy', allow_pickle=True).item()
 
-# Get last timepoint from t0-t1 model
-simulated_t1 = t0_t1_averaged_matrices[-1]
-
-# Binarise
-simulated_t1_binary = (simulated_t1 > 0).astype(int)
-
-# Convert to PyTorch tensor
+# Get last timepoints from t0-t1 model and convert to tensors
+simulated_t1 = t0_t1_matrices['weight_snapshots'][-1]
 simulated_t1 = torch.tensor(simulated_t1, dtype=torch.float)
 simulated_t1 = simulated_t1.unsqueeze(0)
+
+simulated_t1_binary = t0_t1_matrices['adjacency_snapshots'][-1]
 simulated_t1_binary = torch.tensor(simulated_t1_binary, dtype=torch.float)
 simulated_t1_binary = simulated_t1_binary.unsqueeze(0)
 
@@ -691,6 +774,17 @@ plot_energy_landscape(results=t1_t2_results, title='t1 → t2 Energy Landscape',
 
 
 # %% t1-t2 Model --------------------------------------------------
+# Load the model's averaged matrices for seed
+t0_t1_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t0_t1'
+t0_t1_matrices = np.load(f'{t0_t1_model_filepath}/raw_model_outputs.npy', allow_pickle=True).item()
+
+# Get last timepoints from t0-t1 model and convert to tensors
+simulated_t1 = t0_t1_matrices['weight_snapshots'][-1]
+simulated_t1 = torch.tensor(simulated_t1, dtype=torch.float)
+
+simulated_t1_binary = t0_t1_matrices['adjacency_snapshots'][-1]
+simulated_t1_binary = torch.tensor(simulated_t1_binary, dtype=torch.float)
+
 # Load the optimal results into a DataFrame
 t1_t2_sweep_filepath='/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Parameter sweeps/t1_t2'
 t1_t2_results = pd.read_csv(f'{t1_t2_sweep_filepath}/optimal_parameters.csv')
@@ -717,24 +811,30 @@ t1_t2_model = model(
 
 
 # %% t1-t2 Assess Model --------------------------------------------------
-# Load the model's averaged matrices
+# Load the model's averaged matrices for analysis
 t1_t2_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t1_t2'
-t1_t2_averaged_matrices = np.load(f'{t1_t2_model_filepath}/averaged_matrices.npy')
+t1_t2_matrices = np.load(f'{t1_t2_model_filepath}/raw_model_outputs.npy', allow_pickle=True).item()
+
+# Extract weight snapshots
+weight_snapshots = t1_t2_matrices['weight_snapshots']
 
 # Analyse the t0-t1 model
-analyse_model(averaged_matrices=t1_t2_averaged_matrices, output_filepath=t1_t2_model_filepath)
+analyse_model(matrices=weight_snapshots, output_filepath=t1_t2_model_filepath)
 
 
 # %% t2-t3 Parameter Sweep --------------------------------------------------
-# Load the model's averaged matrices
+# Load the model's averaged matrices for seed
 t1_t2_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t1_t2'
-t1_t2_averaged_matrices = np.load(f'{t1_t2_model_filepath}/averaged_matrices.npy')
+t1_t2_matrices = np.load(f'{t1_t2_model_filepath}/raw_model_outputs.npy', allow_pickle=True).item()
 
-# Get last timepoint from t0-t1 model
-simulated_t2 = t1_t2_averaged_matrices[-1]
-
-# Convert to PyTorch tensor
+# Get last timepoints from t0-t1 model and convert to tensors
+simulated_t2 = t1_t2_matrices['weight_snapshots'][-1]
 simulated_t2 = torch.tensor(simulated_t2, dtype=torch.float)
+simulated_t2 = simulated_t2.unsqueeze(0)
+
+simulated_t2_binary = t1_t2_matrices['adjacency_snapshots'][-1]
+simulated_t2_binary = torch.tensor(simulated_t2_binary, dtype=torch.float)
+simulated_t2_binary = simulated_t2_binary.unsqueeze(0)
 
 # Set output
 t2_t3_sweep_filepath='/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Parameter sweeps/t2_t3'
@@ -749,7 +849,9 @@ t2_t3_results, t2_t3_optimal_results = parameter_sweep(
     gamma_values=gamma_values,
     lambdah_value=lambdah_value,
     num_simulations=num_simulations,
-    seed_binary_network=simulated_t2,
+    seed_weighted_network=simulated_t2,
+    seed_binary_network=simulated_t2_binary,
+    weighted_network=modelling_data[2]['weighted_network'],
     binary_network=modelling_data[2]['binary_network'],
     distance_matrix=modelling_data[2]['distance_matrix'],
     num_nodes=modelling_data[2]['num_nodes'],
@@ -762,6 +864,17 @@ plot_energy_landscape(results=t2_t3_results, title='t2 → t3 Energy Landscape',
 
 
 # %% t2-t3 Model --------------------------------------------------
+# Load the model's averaged matrices for seed
+t1_t2_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t1_t2'
+t1_t2_matrices = np.load(f'{t1_t2_model_filepath}/raw_model_outputs.npy', allow_pickle=True).item()
+
+# Get last timepoints from t0-t1 model and convert to tensors
+simulated_t2 = t1_t2_matrices['weight_snapshots'][-1]
+simulated_t2 = torch.tensor(simulated_t2, dtype=torch.float)
+
+simulated_t2_binary = t1_t2_matrices['adjacency_snapshots'][-1]
+simulated_t2_binary = torch.tensor(simulated_t2_binary, dtype=torch.float)
+
 # Load the optimal results into a DataFrame
 t2_t3_sweep_filepath='/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Parameter sweeps/t2_t3'
 t2_t3_results = pd.read_csv(f'{t2_t3_sweep_filepath}/optimal_parameters.csv')
@@ -775,24 +888,28 @@ if not os.path.exists(t2_t3_model_filepath):
 # Create the model
 t2_t3_model = model(
     optimal_results=t2_t3_results,
-    lambdah_value=lambdah_value,
     num_simulations=num_simulations,
-    seed_binary_network=simulated_t2,
-    binary_network=modelling_data[2]['binary_network'],
     distance_matrix=modelling_data[2]['distance_matrix'],
-    num_nodes=modelling_data[2]['num_nodes'],
     num_connections=modelling_data[2]['num_connections'],
+    num_nodes=modelling_data[2]['num_nodes'],
+    seed_binary_network=simulated_t2_binary,
+    seed_weighted_network=simulated_t2,
+    binary_network=modelling_data[2]['binary_network'],
+    weighted_network=modelling_data[2]['weighted_network'],
     output_filepath=t2_t3_model_filepath
     )
 
 
 # %% t2-t3 Assess Model --------------------------------------------------
-# Load the model's averaged matrices
+# Load the model's averaged matrices for analysis
 t2_t3_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t2_t3'
-t2_t3_averaged_matrices = np.load(f'{t2_t3_model_filepath}/averaged_matrices.npy')
+t2_t3_matrices = np.load(f'{t2_t3_model_filepath}/raw_model_outputs.npy', allow_pickle=True).item()
+
+# Extract weight snapshots
+weight_snapshots = t2_t3_matrices['weight_snapshots']
 
 # Analyse the t0-t1 model
-analyse_model(averaged_matrices=t2_t3_averaged_matrices, output_filepath=t2_t3_model_filepath)
+analyse_model(matrices=weight_snapshots, output_filepath=t2_t3_model_filepath)
 
 
 # %%
