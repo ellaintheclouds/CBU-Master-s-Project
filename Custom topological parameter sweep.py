@@ -655,12 +655,12 @@ for slice in slice_data:
 
 # %% Set Parameterspace to Explore --------------------------------------------------
 # Define parameters
-eta_values = torch.linspace(-5, 1.7, 10) ########## increase when testing large parameterspace
-gamma_values = torch.linspace(-5, 1.7, 10) ########## increase when testing large parameterspace
-lambdah_value = 2.0  # Fixed lambda
+eta_values = torch.linspace(-10, 1.7, 10)
+gamma_values = torch.linspace(-5, 10, 10)
+lambdah_value = 2.0
 
 # Number of networks to generate per parameter combination
-num_simulations = 4 ########## increase when testing large parameterspace
+num_simulations = 10
 
 # %% t0-t1 Parameter Sweep --------------------------------------------------
 # Set output
