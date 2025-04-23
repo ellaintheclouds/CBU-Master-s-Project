@@ -37,26 +37,25 @@ def parameter_sweep(
     weighted_network=None,
     binary_network=None,
     output_filepath=None
-): 
-    # Determine mode ----------
+):
+    import torch
+    import pandas as pd
+    import numpy as np
+    from gnm import fitting, evaluation
+    from gnm.generative_rules import MatchingIndex
+    from gnm.weight_criteria import Communicability
+
     is_weighted = weighted_network is not None
+    print(f"Running parameter sweep in {'weighted' if is_weighted else 'binary'} mode.")
 
-    # Print what mode is being used
-    print(f'Running parameter sweep in {'weighted' if is_weighted else 'binary'} mode.')
-
-    # Set up sweep parameters ----------
-    # Weighted mode
     if is_weighted:
         weighted_sweep_parameters = fitting.WeightedSweepParameters(
             alpha=torch.tensor([0.05]),
             optimisation_criterion=[Communicability(omega=1.0)],
         )
-
-    # Binary mode
     else:
-        weighted_sweep_parameters = None  # Not used in binary mode
-    
-    # Binary parameters passed regardless of mode
+        weighted_sweep_parameters = None
+
     binary_sweep_parameters = fitting.BinarySweepParameters(
         eta=eta_values,
         gamma=gamma_values,
@@ -68,7 +67,6 @@ def parameter_sweep(
         num_iterations=[num_connections],
     )
 
-    # Create SweepConfig ----------
     sweep_config = fitting.SweepConfig(
         binary_sweep_parameters=binary_sweep_parameters,
         weighted_sweep_parameters=weighted_sweep_parameters,
@@ -78,7 +76,6 @@ def parameter_sweep(
         seed_weight_matrix=seed_weighted_network
     )
 
-    # Define evaluation criteria ----------
     if is_weighted:
         criteria = [
             evaluation.WeightedNodeStrengthKS(),
@@ -86,6 +83,7 @@ def parameter_sweep(
             evaluation.WeightedClusteringKS()
         ]
         eval_set = [evaluation.MaxCriteria(criteria)]
+        eval_key = 'MaxCriteria(WeightedNodeStrengthKS, WeightedBetweennessKS, WeightedClusteringKS)'
     else:
         criteria = [
             evaluation.DegreeKS(),
@@ -94,8 +92,8 @@ def parameter_sweep(
             evaluation.EdgeLengthKS(distance_matrix)
         ]
         eval_set = [evaluation.MaxCriteria(criteria)]
+        eval_key = 'MaxCriteria(DegreeKS, ClusteringKS, BetweennessKS, EdgeLengthKS)'
 
-    # Run the Parameter Sweep ----------
     experiments = fitting.perform_sweep(
         sweep_config=sweep_config,
         weighted_evaluations=eval_set if is_weighted else None,
@@ -106,59 +104,48 @@ def parameter_sweep(
         verbose=True
     )
 
-    # Evaluate Results ----------
     all_results = []
+    all_runs = []
 
     for experiment in experiments:
         model = experiment.model
+        eval_results = fitting.perform_evaluations(
+            model=model,
+            weighted_evaluations=eval_set if is_weighted else None,
+            binary_evaluations=eval_set if not is_weighted else None,
+            real_binary_matrices=binary_network if not is_weighted else None,
+            real_weighted_matrices=weighted_network if is_weighted else None
+        )
 
+        eta = experiment.run_config.binary_parameters.eta.item()
+        gamma = experiment.run_config.binary_parameters.gamma.item()
+        alpha = experiment.run_config.weighted_parameters.alpha.item() if is_weighted else None
+
+        values = eval_results.weighted_evaluations[eval_key] if is_weighted else eval_results.binary_evaluations[eval_key]
+        mean_energy = torch.mean(values).item()
+
+        # Store summary result
+        summary = {
+            'eta': eta,
+            'gamma': gamma,
+            'mean_energy': mean_energy
+        }
         if is_weighted:
-            # Evaluation
-            eval_results = fitting.perform_evaluations(
-                model=model,
-                weighted_evaluations=eval_set,
-                real_weighted_matrices=weighted_network
-            )
-            
-            # Get parameters
-            alpha = experiment.run_config.weighted_parameters.alpha.item()
-            eta = experiment.run_config.binary_parameters.eta.item()
-            gamma = experiment.run_config.binary_parameters.gamma.item()
-            key = 'MaxCriteria(WeightedNodeStrengthKS, WeightedBetweennessKS, WeightedClusteringKS)'
-            values = eval_results.weighted_evaluations[key]
-            mean_value = torch.mean(values).item()
+            summary['alpha'] = alpha
+        all_results.append(summary)
 
-            # Append results
-            all_results.append({
+        # Store all runs
+        for sim_idx, energy_val in enumerate(values):
+            run = {
                 'eta': eta,
                 'gamma': gamma,
-                'alpha': alpha,
-                'mean_energy': mean_value
-            })
+                'sim_idx': sim_idx,
+                'energy': energy_val.item()
+            }
+            if is_weighted:
+                run['alpha'] = alpha
+            all_runs.append(run)
 
-        else:
-            # Evaluation
-            eval_results = fitting.perform_evaluations(
-                model=model,
-                binary_evaluations=eval_set,
-                real_binary_matrices=binary_network
-            )
-
-            # Get parameters
-            eta = experiment.run_config.binary_parameters.eta.item()
-            gamma = experiment.run_config.binary_parameters.gamma.item()
-            key = 'MaxCriteria(DegreeKS, ClusteringKS, BetweennessKS, EdgeLengthKS)'
-            values = eval_results.binary_evaluations[key]
-            mean_value = torch.mean(values).item()
-
-            # Append results
-            all_results.append({
-                'eta': eta,
-                'gamma': gamma,
-                'mean_energy': mean_value
-            })
-
-    # Optimal Parameter Selection ----------
     optimal_experiments, optimal_energies = fitting.optimise_evaluation(
         experiments=experiments,
         criterion=eval_set[0]
@@ -166,24 +153,34 @@ def parameter_sweep(
 
     optimal_results = []
     for exp, energy_val in zip(optimal_experiments, optimal_energies):
-        # Create a single dictionary for all parameters
+        eta = exp.run_config.binary_parameters.eta.item()
+        gamma = exp.run_config.binary_parameters.gamma.item()
+        alpha = exp.run_config.weighted_parameters.alpha.item() if is_weighted else None
+
+        values = next(
+            r for r in all_runs
+            if r['eta'] == eta and r['gamma'] == gamma and (r['alpha'] == alpha if is_weighted else True)
+        )
+
+        runs = [r for r in all_runs if r['eta'] == eta and r['gamma'] == gamma and (r['alpha'] == alpha if is_weighted else True)]
+        mean_energy = energy_val.item()
+        closest_run = min(runs, key=lambda x: abs(x['energy'] - mean_energy))
+
         result = {
-            'energy': energy_val.item(),
-            'eta': exp.run_config.binary_parameters.eta.item(),
-            'gamma': exp.run_config.binary_parameters.gamma.item(),
-            'lambdah': lambdah_value
+            'eta': eta,
+            'gamma': gamma,
+            'lambdah': lambdah_value,
+            'energy': mean_energy,
+            'best_sim_idx': closest_run['sim_idx']
         }
-
-        # Add alpha only if in weighted mode
         if is_weighted:
-            result['alpha'] = exp.run_config.weighted_parameters.alpha.item()
+            result['alpha'] = alpha
 
-        # Append the combined dictionary to the list
         optimal_results.append(result)
 
-    # Save to disk ----------
     if output_filepath:
         pd.DataFrame(all_results).to_csv(f'{output_filepath}/all_parameters.csv', index=False)
+        pd.DataFrame(all_runs).to_csv(f'{output_filepath}/all_runs.csv', index=False)
         pd.DataFrame(optimal_results).to_csv(f'{output_filepath}/optimal_parameters.csv', index=False)
 
     return all_results, optimal_results
@@ -598,7 +595,7 @@ if not os.path.exists(os.path.dirname(pickle_dir)):
 
 # Initialise lists
 slice_data = []
-modelling_data = []  # Keep this as a list
+modelling_data = []
 
 # Load organoid slice data
 with open(pickle_dir, 'rb') as f:
@@ -607,60 +604,57 @@ with open(pickle_dir, 'rb') as f:
 # Define slices for each timepoint
 timepoint_slice_data = ['C_d96_s2_dt10', 'C_d153_s7_dt10', 'C_d184_s8_dt10']
 
-# Iterate through all slices
 for slice in slice_data:
-    # Process only the specified file names
     if slice['file_name'] in timepoint_slice_data:
-
-        # Extract the adjacency matrix and distance matrix
-        adjM = slice['adjM']
+        adjM = np.maximum(slice['adjM'], 0)
         dij = slice['dij']
 
-        # Ensure the adjacency matrix is non-negative
-        adjM = np.maximum(adjM, 0)  # Replace negative values with 0
-
-        # Threshold the adjacency matrix to retain the top 5% strongest connections
+        # Threshold to keep top 5% strongest connections
         adjM_thresholded = bct.threshold_proportional(adjM, 0.05)
-        
-        # Create (50, 50) subsets for testing
-        adjM_thresholded = adjM_thresholded[:50, :50]  ########## Remove when testing larger network
-        dij = dij[:50, :50]  ########## Remove when testing larger network
 
-        # Get the number of nodes and connections
+        # Temporary downsize for testing
+        adjM_thresholded = adjM_thresholded[40:140, 40:140]
+        dij = dij[40:140, 40:140]
+
+        # Calculate total connections at this timepoint
+        total_connections = np.count_nonzero(adjM_thresholded) // 2
         num_nodes = adjM_thresholded.shape[0]
-        num_connections = np.count_nonzero(adjM_thresholded) // 2
 
-        # Binarise the adjacency matrix
-        binary_adjM_thresholded = (adjM_thresholded > 0).astype(int) ########## Remove when changing to weighted
+        # If it's the first timepoint, keep all connections
+        if len(modelling_data) == 0:
+            num_connections = total_connections
+        else:
+            prev_total = modelling_data[-1]['total_connections']
+            num_connections = total_connections - prev_total
 
-        # Convert matrices to PyTorch tensors
-        weighted_network = torch.tensor(adjM_thresholded, dtype=torch.float)
-        weighted_network = weighted_network.unsqueeze(0)
-        binary_network = torch.tensor(binary_adjM_thresholded, dtype=torch.float)
-        binary_network = binary_network.unsqueeze(0)
-        distance_matrix = torch.tensor(dij, dtype=torch.float)
-        distance_matrix = distance_matrix.unsqueeze(0)
-        
-        # Add the data to the modelling_data list
+        # Binarise and convert to tensors
+        binary_adjM = (adjM_thresholded > 0).astype(int)
+        weighted_network = torch.tensor(adjM_thresholded, dtype=torch.float).unsqueeze(0)
+        binary_network = torch.tensor(binary_adjM, dtype=torch.float).unsqueeze(0)
+        distance_matrix = torch.tensor(dij, dtype=torch.float).unsqueeze(0)
+
+        # Store in modelling_data
         modelling_data.append({
             'file_name': slice['file_name'],
             'adjM_thresholded': adjM_thresholded,
             'weighted_network': weighted_network,
             'binary_network': binary_network,
-            'dij': dij,
             'distance_matrix': distance_matrix,
             'num_nodes': num_nodes,
-            'num_connections': num_connections
+            'num_connections': num_connections,
+            'total_connections': total_connections
         })
+
 
 # %% Set Parameterspace to Explore --------------------------------------------------
 # Define parameters
-eta_values = torch.linspace(-10, 1.7, 10)
-gamma_values = torch.linspace(-5, 10, 10)
+eta_values = torch.linspace(-10, 3, 70)
+gamma_values = torch.linspace(-2, 8, 70)
 lambdah_value = 2.0
 
 # Number of networks to generate per parameter combination
-num_simulations = 10
+num_simulations = 6
+
 
 # %% t0-t1 Parameter Sweep --------------------------------------------------
 # Set output
@@ -911,5 +905,88 @@ weight_snapshots = t2_t3_matrices['weight_snapshots']
 # Analyse the t0-t1 model
 analyse_model(matrices=weight_snapshots, output_filepath=t2_t3_model_filepath)
 
+
+# %% Assess All Models --------------------------------------------------
+# Load the adjacency matrices for the three timepoints
+# Update the file paths to match your directory structure
+t0_t1_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t0_t1'
+t1_t2_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t1_t2'
+t2_t3_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t2_t3'
+
+# Load the raw model outputs
+t0_t1_matrices = np.load(f'{t0_t1_model_filepath}/raw_model_outputs.npy', allow_pickle=True).item()
+t1_t2_matrices = np.load(f'{t1_t2_model_filepath}/raw_model_outputs.npy', allow_pickle=True).item()
+t2_t3_matrices = np.load(f'{t2_t3_model_filepath}/raw_model_outputs.npy', allow_pickle=True).item()
+
+# Create a 2x2 panel figure for the histograms
+fig, axes = plt.subplots(2, 2, figsize=(10, 8))  # Smaller graph size for compact layout
+
+# Increase font size for labels and ticks
+font_size = 18  # Larger font size for labels
+tick_size = 16  # Larger font size for ticks
+
+# Define base colors for each graph and generate shades for timepoints
+graph_colours = {
+    'degree': ['#beb0e8', '#6d4dcb', '#301e67'],  # Shades for Degree
+    'clustering': ['#b7cce1', '#93b3d2', '#4b80b4'],  # Shades for Clustering
+    'betweenness': ['#cae1e8', '#95c3d0', '#5fa6b9'],  # Shades for Betweenness
+    'total_edge_length': ['#d7f4eb', '#afe9d8', '#73d9ba'],  # Shades for Edge length
+}
+
+# Define timepoints
+timepoints = [0, 1, 2]  # Indices for t1, t2, t3
+timepoint_labels = ['T1', 'T2', 'T3']  # Short labels for timepoints
+
+# Degree Distribution (Top-left)
+for i, tp in enumerate(timepoints):
+    sns.kdeplot(metrics[tp]['degree'], color=graph_colours['degree'][i], ax=axes[0, 0], linewidth=3, alpha=0.7)
+axes[0, 0].set_xlabel('Degree', fontsize=font_size)
+axes[0, 0].set_ylabel('Density', fontsize=font_size)
+axes[0, 0].tick_params(axis='both', labelsize=tick_size)
+axes[0, 0].xaxis.set_major_locator(plt.MaxNLocator(4))  # Limit to 4 x-axis labels
+axes[0, 0].yaxis.set_major_locator(plt.MaxNLocator(4))  # Limit to 4 y-axis labels
+
+# Clustering Coefficient Distribution (Top-right)
+for i, tp in enumerate(timepoints):
+    sns.kdeplot(metrics[tp]['clustering'], color=graph_colours['clustering'][i], ax=axes[0, 1], linewidth=3, alpha=0.7)
+axes[0, 1].set_xlabel('Clustering Coefficient', fontsize=font_size)
+axes[0, 1].set_ylabel('Density', fontsize=font_size)
+axes[0, 1].tick_params(axis='both', labelsize=tick_size)
+axes[0, 1].xaxis.set_major_locator(plt.MaxNLocator(4))  # Limit to 4 x-axis labels
+axes[0, 1].yaxis.set_major_locator(plt.MaxNLocator(4))  # Limit to 4 y-axis labels
+
+# Betweenness Centrality Distribution (Bottom-left)
+for i, tp in enumerate(timepoints):
+    sns.kdeplot(metrics[tp]['betweenness'], color=graph_colours['betweenness'][i], ax=axes[1, 0], linewidth=3, alpha=0.7)
+axes[1, 0].set_xlabel('Betweenness Centrality', fontsize=font_size)
+axes[1, 0].set_ylabel('Density', fontsize=font_size)
+axes[1, 0].tick_params(axis='both', labelsize=tick_size)
+axes[1, 0].xaxis.set_major_locator(plt.MaxNLocator(4))  # Limit to 4 x-axis labels
+axes[1, 0].yaxis.set_major_locator(plt.MaxNLocator(4))  # Limit to 4 y-axis labels
+
+# Total Edge Length Distribution (Bottom-right)
+for i, tp in enumerate(timepoints):
+    sns.kdeplot(metrics[tp]['total_edge_length'], color=graph_colours['total_edge_length'][i], ax=axes[1, 1], linewidth=3, alpha=0.7)
+axes[1, 1].set_xlabel('Total Edge Length', fontsize=font_size)
+axes[1, 1].set_ylabel('Density', fontsize=font_size)
+axes[1, 1].tick_params(axis='both', labelsize=tick_size)
+axes[1, 1].xaxis.set_major_locator(plt.MaxNLocator(4))  # Limit to 4 x-axis labels
+axes[1, 1].yaxis.set_major_locator(plt.MaxNLocator(4))  # Limit to 4 y-axis labels
+
+# Customize axes
+for ax in axes.flatten():
+    ax.spines['right'].set_visible(False)  # Remove right boundary
+    ax.spines['top'].set_visible(False)    # Remove top boundary
+    ax.spines['left'].set_color('lightgrey')  # Set left boundary to light grey
+    ax.spines['bottom'].set_color('lightgrey')  # Set bottom boundary to light grey
+    ax.spines['left'].set_linewidth(1)
+    ax.spines['bottom'].set_linewidth(1)
+
+# Adjust spacing between subplots
+fig.tight_layout(pad=3.0, w_pad=3.0, h_pad=3.0)  # Adjust spacing between plots
+
+# Save the plot
+plt.savefig('/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/energy_landscape_across_timepoints.png', bbox_inches='tight', dpi=300)
+plt.close()
 
 # %%
