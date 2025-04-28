@@ -1,6 +1,7 @@
 # %% Import Packages and Functions --------------------------------------------------
 # Network Neuroscience
 import bct
+from bct import clustering_coef_wu, betweenness_wei, strengths_und
 import gnm
 from gnm import fitting, evaluation, BinaryGenerativeParameters, GenerativeNetworkModel
 from gnm.generative_rules import MatchingIndex
@@ -17,6 +18,7 @@ from scipy.spatial.distance import cdist
 
 # Plotting
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.mplot3d import Axes3D
 import pandas as pd
 import plotly.graph_objects as go
@@ -38,12 +40,6 @@ def parameter_sweep(
     binary_network=None,
     output_filepath=None
 ):
-    import torch
-    import pandas as pd
-    import numpy as np
-    from gnm import fitting, evaluation
-    from gnm.generative_rules import MatchingIndex
-    from gnm.weight_criteria import Communicability
 
     is_weighted = weighted_network is not None
     print(f"Running parameter sweep in {'weighted' if is_weighted else 'binary'} mode.")
@@ -454,135 +450,6 @@ def analyse_model(matrices, output_filepath=None):
         plt.savefig(f'{output_filepath}/version_{idx}_correlation_heatmap.png', dpi=300)
         plt.close()
 
-    """
-    # Ensure the output directory exists
-    os.makedirs(output_filepath, exist_ok=True)
-
-    for idx, matrix in enumerate(matrices):
-        # Visualize every 5th averaged matrix
-        step = 5  # Visualize every 5th connection
-        selected_matrices = matrix[::step]  # Select every 5th matrix
-
-        num_matrices = len(selected_matrices)
-        cols = 5  # Number of columns for the grid
-        rows = (num_matrices + cols - 1) // cols  # Calculate rows for the grid
-
-        # Create the figure with subplots
-        fig, axes = plt.subplots(rows, cols, figsize=(25, 5 * rows))  # Widen the figure for square plots
-        axes = axes.flatten()
-
-        for i, ax in enumerate(axes):
-            if i < num_matrices:
-                sns.heatmap(
-                    selected_matrices[i],
-                    cmap='viridis',
-                    cbar=(i == 0),  # Only show the colorbar for the first plot
-                    ax=ax
-                )
-                ax.set_title(f'Connection {(i * step) + 1}', fontsize=12)  # Adjust title to reflect the skipped indices
-                if i == 0:
-                    # Customize the first plot with axis labels and colorbar
-                    num_labels = 4
-                    ax.set_xticks(np.linspace(0, selected_matrices[i].shape[1] - 1, num_labels))
-                    ax.set_yticks(np.linspace(0, selected_matrices[i].shape[0] - 1, num_labels))
-                    ax.set_xticklabels(np.linspace(0, selected_matrices[i].shape[1] - 1, num_labels, dtype=int), fontsize=10)
-                    ax.set_yticklabels(np.linspace(0, selected_matrices[i].shape[0] - 1, num_labels, dtype=int), fontsize=10)
-                    colorbar = ax.collections[0].colorbar
-                    colorbar.set_ticks([selected_matrices[i].min(), selected_matrices[i].max()])
-                    colorbar.set_ticklabels([f'{selected_matrices[i].min():.2f}', f'{selected_matrices[i].max():.2f}'])
-                else:
-                    ax.set_xticks([])
-                    ax.set_yticks([])
-            else:
-                ax.axis('off')
-
-        # Save the averaged matrices plot
-        fig.tight_layout(pad=3.0)
-        plt.savefig(f'{output_filepath}/{idx} matrix_growth.png', dpi=300)
-        plt.close(fig)
-
-        # Analyse the final simulated timepoint
-        sim_adjm = matrix[-1]
-
-        # Compute graph metrics
-        degree = np.sum(sim_adjm != 0, axis=0)
-        total_edge_length = np.sum(sim_adjm, axis=0)
-        clustering = bct.clustering_coef_bu(sim_adjm)
-        betweenness = bct.betweenness_wei(1 / (sim_adjm + np.finfo(float).eps))
-        efficiency = bct.efficiency_wei(sim_adjm, local=True)
-
-        # Compute matching index
-        N = sim_adjm.shape[0]
-        matching_matrix = np.zeros((N, N))
-        for i in range(N):
-            for j in range(N):
-                if i != j:
-                    min_weights = np.minimum(sim_adjm[i, :], sim_adjm[j, :])
-                    max_weights = np.maximum(sim_adjm[i, :], sim_adjm[j, :])
-                    if np.sum(max_weights) > 0:  # Avoid division by zero
-                        matching_matrix[i, j] = np.sum(min_weights) / np.sum(max_weights)
-
-        # Save adjacency matrix plot
-        plt.figure(figsize=(7, 6))
-        ax = sns.heatmap(sim_adjm, cmap='viridis', cbar=True)
-        ax.set_title('Thresholded Adjacency Matrix', fontsize=14)
-        num_labels = 10
-        ax.set_xticks(np.linspace(0, sim_adjm.shape[1] - 1, num_labels))
-        ax.set_yticks(np.linspace(0, sim_adjm.shape[0] - 1, num_labels))
-        ax.set_xticklabels(np.linspace(0, sim_adjm.shape[1] - 1, num_labels, dtype=int))
-        ax.set_yticklabels(np.linspace(0, sim_adjm.shape[0] - 1, num_labels, dtype=int))
-        plt.savefig(f'{output_filepath}/{idx} adjacency_matrix.png', dpi=300)
-        plt.close()
-
-        # Plot graph metrics
-        fig, axes = plt.subplots(2, 2, figsize=(10, 8))
-        font_size = 16
-        tick_size = 14
-        line_color = '#1f77b4'
-
-        sns.kdeplot(degree, color=line_color, ax=axes[0, 0], linewidth=4, alpha=0.7)
-        axes[0, 0].set_xlabel('Degree', fontsize=font_size)
-        axes[0, 0].set_ylabel('Density', fontsize=font_size)
-        axes[0, 0].tick_params(axis='both', labelsize=tick_size)
-
-        sns.kdeplot(total_edge_length, color=line_color, ax=axes[0, 1], linewidth=4, alpha=0.7)
-        axes[0, 1].set_xlabel('Total Edge Length', fontsize=font_size)
-        axes[0, 1].set_ylabel('Density', fontsize=font_size)
-        axes[0, 1].tick_params(axis='both', labelsize=tick_size)
-
-        sns.kdeplot(clustering, color=line_color, ax=axes[1, 0], linewidth=4, alpha=0.7)
-        axes[1, 0].set_xlabel('Clustering Coefficient', fontsize=font_size)
-        axes[1, 0].set_ylabel('Density', fontsize=font_size)
-        axes[1, 0].tick_params(axis='both', labelsize=tick_size)
-
-        sns.kdeplot(betweenness, color=line_color, ax=axes[1, 1], linewidth=4, alpha=0.7)
-        axes[1, 1].set_xlabel('Betweenness Centrality', fontsize=font_size)
-        axes[1, 1].set_ylabel('Density', fontsize=font_size)
-        axes[1, 1].tick_params(axis='both', labelsize=tick_size)
-
-        fig.tight_layout(pad=2.0, w_pad=3.0)
-        plt.savefig(f'{output_filepath}/{idx} graph_metrics.png', dpi=300)
-        plt.close(fig)
-
-        # Compute and save correlation heatmap
-        metrics_df = pd.DataFrame({
-            'degree': degree,
-            'clustering': clustering,
-            'betweenness': betweenness,
-            'total_edge_length': total_edge_length,
-            'efficiency': efficiency,
-            'matching_index': np.mean(matching_matrix, axis=1)
-        })
-        correlation_matrix = metrics_df.corr()
-        formatted_labels = ['Degree', 'Clustering', 'Betweenness', 'Total Edge Length', 'Efficiency', 'Matching Index']
-
-        plt.figure(figsize=(8, 6))
-        ax = sns.heatmap(correlation_matrix, cmap='RdBu_r', xticklabels=formatted_labels, yticklabels=formatted_labels, center=0, cbar=True)
-        ax.set_title('Topological Fingerprint Heatmap', fontsize=14)
-        ax.tick_params(axis='both', which='major', labelsize=10)
-        plt.savefig(f'{output_filepath}/{idx} correlation_heatmap.png', dpi=300)
-        plt.close()
-        """
 
 # %% Load and Process Data --------------------------------------------------
 # Set working directory
@@ -613,8 +480,9 @@ for slice in slice_data:
         adjM_thresholded = bct.threshold_proportional(adjM, 0.05)
 
         # Temporary downsize for testing
-        adjM_thresholded = adjM_thresholded[40:140, 40:140]
-        dij = dij[40:140, 40:140]
+        adjM_thresholded = adjM_thresholded[40:140, 40:140] ########## change when using full network
+
+        dij = dij[40:140, 40:140] ########## change when using full network
 
         # Calculate total connections at this timepoint
         total_connections = np.count_nonzero(adjM_thresholded) // 2
@@ -626,7 +494,7 @@ for slice in slice_data:
         else:
             prev_total = modelling_data[-1]['total_connections']
             num_connections = total_connections - prev_total
-
+        
         # Binarise and convert to tensors
         binary_adjM = (adjM_thresholded > 0).astype(int)
         weighted_network = torch.tensor(adjM_thresholded, dtype=torch.float).unsqueeze(0)
@@ -648,12 +516,12 @@ for slice in slice_data:
 
 # %% Set Parameterspace to Explore --------------------------------------------------
 # Define parameters
-eta_values = torch.linspace(-10, 3, 70)
-gamma_values = torch.linspace(-2, 8, 70)
-lambdah_value = 2.0
+eta_values = torch.linspace(-10, 3, 100) ########## may need to change this 
+gamma_values = torch.linspace(-2, 8, 100) ########## may need to change this
+lambdah_value = 2.0 ########## may need to change this
 
 # Number of networks to generate per parameter combination
-num_simulations = 6
+num_simulations = 10 ########## change this depending on the time available
 
 
 # %% t0-t1 Parameter Sweep --------------------------------------------------
@@ -886,8 +754,8 @@ t2_t3_model = model(
     distance_matrix=modelling_data[2]['distance_matrix'],
     num_connections=modelling_data[2]['num_connections'],
     num_nodes=modelling_data[2]['num_nodes'],
-    seed_binary_network=simulated_t2_binary,
-    seed_weighted_network=simulated_t2,
+    seed_binary_network=simulated_t2_binary.unsqueeze(0)[:,:1,:,:],
+    seed_weighted_network=simulated_t2.unsqueeze(0)[:,:1,:,:],
     binary_network=modelling_data[2]['binary_network'],
     weighted_network=modelling_data[2]['weighted_network'],
     output_filepath=t2_t3_model_filepath
@@ -905,88 +773,5 @@ weight_snapshots = t2_t3_matrices['weight_snapshots']
 # Analyse the t0-t1 model
 analyse_model(matrices=weight_snapshots, output_filepath=t2_t3_model_filepath)
 
-
-# %% Assess All Models --------------------------------------------------
-# Load the adjacency matrices for the three timepoints
-# Update the file paths to match your directory structure
-t0_t1_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t0_t1'
-t1_t2_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t1_t2'
-t2_t3_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t2_t3'
-
-# Load the raw model outputs
-t0_t1_matrices = np.load(f'{t0_t1_model_filepath}/raw_model_outputs.npy', allow_pickle=True).item()
-t1_t2_matrices = np.load(f'{t1_t2_model_filepath}/raw_model_outputs.npy', allow_pickle=True).item()
-t2_t3_matrices = np.load(f'{t2_t3_model_filepath}/raw_model_outputs.npy', allow_pickle=True).item()
-
-# Create a 2x2 panel figure for the histograms
-fig, axes = plt.subplots(2, 2, figsize=(10, 8))  # Smaller graph size for compact layout
-
-# Increase font size for labels and ticks
-font_size = 18  # Larger font size for labels
-tick_size = 16  # Larger font size for ticks
-
-# Define base colors for each graph and generate shades for timepoints
-graph_colours = {
-    'degree': ['#beb0e8', '#6d4dcb', '#301e67'],  # Shades for Degree
-    'clustering': ['#b7cce1', '#93b3d2', '#4b80b4'],  # Shades for Clustering
-    'betweenness': ['#cae1e8', '#95c3d0', '#5fa6b9'],  # Shades for Betweenness
-    'total_edge_length': ['#d7f4eb', '#afe9d8', '#73d9ba'],  # Shades for Edge length
-}
-
-# Define timepoints
-timepoints = [0, 1, 2]  # Indices for t1, t2, t3
-timepoint_labels = ['T1', 'T2', 'T3']  # Short labels for timepoints
-
-# Degree Distribution (Top-left)
-for i, tp in enumerate(timepoints):
-    sns.kdeplot(metrics[tp]['degree'], color=graph_colours['degree'][i], ax=axes[0, 0], linewidth=3, alpha=0.7)
-axes[0, 0].set_xlabel('Degree', fontsize=font_size)
-axes[0, 0].set_ylabel('Density', fontsize=font_size)
-axes[0, 0].tick_params(axis='both', labelsize=tick_size)
-axes[0, 0].xaxis.set_major_locator(plt.MaxNLocator(4))  # Limit to 4 x-axis labels
-axes[0, 0].yaxis.set_major_locator(plt.MaxNLocator(4))  # Limit to 4 y-axis labels
-
-# Clustering Coefficient Distribution (Top-right)
-for i, tp in enumerate(timepoints):
-    sns.kdeplot(metrics[tp]['clustering'], color=graph_colours['clustering'][i], ax=axes[0, 1], linewidth=3, alpha=0.7)
-axes[0, 1].set_xlabel('Clustering Coefficient', fontsize=font_size)
-axes[0, 1].set_ylabel('Density', fontsize=font_size)
-axes[0, 1].tick_params(axis='both', labelsize=tick_size)
-axes[0, 1].xaxis.set_major_locator(plt.MaxNLocator(4))  # Limit to 4 x-axis labels
-axes[0, 1].yaxis.set_major_locator(plt.MaxNLocator(4))  # Limit to 4 y-axis labels
-
-# Betweenness Centrality Distribution (Bottom-left)
-for i, tp in enumerate(timepoints):
-    sns.kdeplot(metrics[tp]['betweenness'], color=graph_colours['betweenness'][i], ax=axes[1, 0], linewidth=3, alpha=0.7)
-axes[1, 0].set_xlabel('Betweenness Centrality', fontsize=font_size)
-axes[1, 0].set_ylabel('Density', fontsize=font_size)
-axes[1, 0].tick_params(axis='both', labelsize=tick_size)
-axes[1, 0].xaxis.set_major_locator(plt.MaxNLocator(4))  # Limit to 4 x-axis labels
-axes[1, 0].yaxis.set_major_locator(plt.MaxNLocator(4))  # Limit to 4 y-axis labels
-
-# Total Edge Length Distribution (Bottom-right)
-for i, tp in enumerate(timepoints):
-    sns.kdeplot(metrics[tp]['total_edge_length'], color=graph_colours['total_edge_length'][i], ax=axes[1, 1], linewidth=3, alpha=0.7)
-axes[1, 1].set_xlabel('Total Edge Length', fontsize=font_size)
-axes[1, 1].set_ylabel('Density', fontsize=font_size)
-axes[1, 1].tick_params(axis='both', labelsize=tick_size)
-axes[1, 1].xaxis.set_major_locator(plt.MaxNLocator(4))  # Limit to 4 x-axis labels
-axes[1, 1].yaxis.set_major_locator(plt.MaxNLocator(4))  # Limit to 4 y-axis labels
-
-# Customize axes
-for ax in axes.flatten():
-    ax.spines['right'].set_visible(False)  # Remove right boundary
-    ax.spines['top'].set_visible(False)    # Remove top boundary
-    ax.spines['left'].set_color('lightgrey')  # Set left boundary to light grey
-    ax.spines['bottom'].set_color('lightgrey')  # Set bottom boundary to light grey
-    ax.spines['left'].set_linewidth(1)
-    ax.spines['bottom'].set_linewidth(1)
-
-# Adjust spacing between subplots
-fig.tight_layout(pad=3.0, w_pad=3.0, h_pad=3.0)  # Adjust spacing between plots
-
-# Save the plot
-plt.savefig('/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/energy_landscape_across_timepoints.png', bbox_inches='tight', dpi=300)
-plt.close()
 
 # %%
