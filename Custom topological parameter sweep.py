@@ -25,7 +25,7 @@ import plotly.graph_objects as go
 import seaborn as sns
 
 
-# %% Define Functions --------------------------------------------------
+# %% Define Sweep Functions --------------------------------------------------
 def parameter_sweep(
     eta_values,
     gamma_values,
@@ -41,9 +41,11 @@ def parameter_sweep(
     output_filepath=None
 ):
 
+    # Determine mode and print what mode is being used
     is_weighted = weighted_network is not None
-    print(f"Running parameter sweep in {'weighted' if is_weighted else 'binary'} mode.")
+    print(f'Running parameter sweep in {'weighted' if is_weighted else 'binary'} mode.')
 
+    # Define sweep parameters
     if is_weighted:
         weighted_sweep_parameters = fitting.WeightedSweepParameters(
             alpha=torch.tensor([0.05]),
@@ -63,6 +65,7 @@ def parameter_sweep(
         num_iterations=[num_connections],
     )
 
+    # Create the sweep configuration
     sweep_config = fitting.SweepConfig(
         binary_sweep_parameters=binary_sweep_parameters,
         weighted_sweep_parameters=weighted_sweep_parameters,
@@ -72,6 +75,7 @@ def parameter_sweep(
         seed_weight_matrix=seed_weighted_network
     )
 
+    # Define the evaluation criteria
     if is_weighted:
         criteria = [
             evaluation.WeightedNodeStrengthKS(),
@@ -90,6 +94,7 @@ def parameter_sweep(
         eval_set = [evaluation.MaxCriteria(criteria)]
         eval_key = 'MaxCriteria(DegreeKS, ClusteringKS, BetweennessKS, EdgeLengthKS)'
 
+    # Perform the parameter sweep
     experiments = fitting.perform_sweep(
         sweep_config=sweep_config,
         weighted_evaluations=eval_set if is_weighted else None,
@@ -100,8 +105,8 @@ def parameter_sweep(
         verbose=True
     )
 
+    # Evaluate all parameter combinations
     all_results = []
-    all_runs = []
 
     for experiment in experiments:
         model = experiment.model
@@ -120,63 +125,47 @@ def parameter_sweep(
         values = eval_results.weighted_evaluations[eval_key] if is_weighted else eval_results.binary_evaluations[eval_key]
         mean_energy = torch.mean(values).item()
 
-        # Store summary result
         summary = {
             'eta': eta,
             'gamma': gamma,
             'mean_energy': mean_energy
         }
+        
         if is_weighted:
             summary['alpha'] = alpha
+
         all_results.append(summary)
 
-        # Store all runs
-        for sim_idx, energy_val in enumerate(values):
-            run = {
-                'eta': eta,
-                'gamma': gamma,
-                'sim_idx': sim_idx,
-                'energy': energy_val.item()
-            }
-            if is_weighted:
-                run['alpha'] = alpha
-            all_runs.append(run)
 
+
+    # Find optimal parameter combinations
     optimal_experiments, optimal_energies = fitting.optimise_evaluation(
         experiments=experiments,
         criterion=eval_set[0]
     )
 
     optimal_results = []
+
     for exp, energy_val in zip(optimal_experiments, optimal_energies):
         eta = exp.run_config.binary_parameters.eta.item()
         gamma = exp.run_config.binary_parameters.gamma.item()
         alpha = exp.run_config.weighted_parameters.alpha.item() if is_weighted else None
 
-        values = next(
-            r for r in all_runs
-            if r['eta'] == eta and r['gamma'] == gamma and (r['alpha'] == alpha if is_weighted else True)
-        )
-
-        runs = [r for r in all_runs if r['eta'] == eta and r['gamma'] == gamma and (r['alpha'] == alpha if is_weighted else True)]
-        mean_energy = energy_val.item()
-        closest_run = min(runs, key=lambda x: abs(x['energy'] - mean_energy))
-
         result = {
             'eta': eta,
             'gamma': gamma,
             'lambdah': lambdah_value,
-            'energy': mean_energy,
-            'best_sim_idx': closest_run['sim_idx']
-        }
+            'energy': mean_energy
+            }
+
         if is_weighted:
             result['alpha'] = alpha
 
         optimal_results.append(result)
 
+    # Save results as csv files
     if output_filepath:
         pd.DataFrame(all_results).to_csv(f'{output_filepath}/all_parameters.csv', index=False)
-        pd.DataFrame(all_runs).to_csv(f'{output_filepath}/all_runs.csv', index=False)
         pd.DataFrame(optimal_results).to_csv(f'{output_filepath}/optimal_parameters.csv', index=False)
 
     return all_results, optimal_results
@@ -229,12 +218,15 @@ def plot_energy_landscape(
     else:
         plt.show()
 
+
+# %% Define Model Functions --------------------------------------------------
 def model(
     optimal_results,
     num_simulations,
     distance_matrix,
     num_nodes,
     num_connections,
+    real_network,
     seed_binary_network=None,
     seed_weighted_network=None,
     binary_network=None,
@@ -242,10 +234,8 @@ def model(
     output_filepath=None
     ):
 
-    # Determine mode ----------
+    # Determine mode and print what mode is being used
     is_weighted = weighted_network is not None
-
-    # Print what mode is being used
     print(f'Running model in {'weighted' if is_weighted else 'binary'} mode.')
 
     # Set up sweep parameters ----------
@@ -258,7 +248,7 @@ def model(
 
     # Binary mode
     else:
-        weighted_parameters = None  # Not used in binary mode
+        weighted_parameters = None
     
     # Binary parameters passed regardless of mode
     binary_parameters = gnm.BinaryGenerativeParameters(
@@ -294,23 +284,57 @@ def model(
 
     # Unpack the run_model output ----------
     adjacency_snapshots = run_model[1]
-    weight_snapshots = run_model[2]
+    weight_snapshots = run_model[2] if is_weighted else None
+
+
+    # Calculate the energy of each model run ----------
+    # Stack generated networks
+    synthetic_matrices = torch.stack([torch.tensor(matrix, dtype=torch.float32) for matrix in adjacency_snapshots])
+
+    # Choose correct real network
+    real_network = real_network.squeeze(0).unsqueeze(0)
+
+    # Choose evaluation criteria
+    if is_weighted:
+        criteria = [
+            evaluation.WeightedNodeStrengthKS(),
+            evaluation.WeightedClusteringKS(),
+            evaluation.WeightedBetweennessKS()
+        ]
+    else:
+        criteria = [
+            evaluation.DegreeKS(),
+            evaluation.ClusteringKS(),
+            evaluation.BetweennessKS(),
+            evaluation.EdgeLengthKS(distance_matrix)
+        ]
+    eval_set = evaluation.MaxCriteria(criteria)
+
+    # Evaluate
+    ks_values = eval_set(synthetic_matrices, real_network)
+    ks_values = ks_values.squeeze(1)
+
+    # Find simulation closest to mean KS
+    mean_ks = torch.mean(ks_values)
+    best_sim_idx = torch.argmin(torch.abs(ks_values - mean_ks)).item()
 
     # Save raw matrices from the model ----------
-    # Convert to NumPy
-    adjacency_numpy = [snap.numpy() for snap in adjacency_snapshots]
+    # Convert the best adjacency snapshot to numpy
+    adjacency_numpy = adjacency_snapshots[best_sim_idx].numpy()
 
+    # If weighted, also get best weight snapshot
     if weight_snapshots is not None:
-        weight_numpy = [snap.numpy() for snap in weight_snapshots]
+        weight_numpy = weight_snapshots[best_sim_idx].numpy()
     else:
         weight_numpy = None
 
-    # Save raw model outputs
+    # Create dictionary of raw outputs
     raw_output = {
         'adjacency_snapshots': adjacency_numpy,
         'weight_snapshots': weight_numpy
     }
 
+    # Save best simulation
     if output_filepath:
         np.save(f'{output_filepath}/raw_model_outputs.npy', raw_output)
 
@@ -318,137 +342,137 @@ def analyse_model(matrices, output_filepath=None):
     # Ensure the output directory exists
     os.makedirs(output_filepath, exist_ok=True)
 
-    # Iterate through different runs
-    for idx in range(len(matrices[0])):
-        # Print the current version being analysed
-        print(f'Analysing version {idx + 1} of {len(matrices[0])}')
+    # Visualize every 5th averaged matrix
+    step = 10  # Visualize every 5th connection
+    start_idx = 9  # Start from the 10th connection
+    selected_matrices = matrices[start_idx::step] # Select every 5th matrix
 
-        # Extract matrix_series: all timepoints for the current version
-        matrix_series = [timepoint[idx] for timepoint in matrices]
+    # Set up figure layout
+    num_matrices = len(selected_matrices)
+    cols = 5  # Number of columns for the grid
+    rows = (num_matrices + cols - 1) // cols # Calculate number of rows for the grid
 
-        # Visualize every 5th averaged matrix
-        step = 5  # Visualize every 5th connection
-        selected_matrices = matrix_series[::step] # Select every 5th matrix
+    # Create the figure with subplots
+    fig, axes = plt.subplots(rows, cols, figsize=(5 * cols, 5 * rows))
+    axes = axes.flatten()
 
-        num_matrices = len(selected_matrices)
-        cols = 5  # Number of columns for the grid
-        rows = (num_matrices + cols - 1) // cols # Calculate rows for the grid
+    # Loop through the selected matrices and plot them
+    for i, ax in enumerate(axes):
+        if i < num_matrices:
+            sns.heatmap(
+                selected_matrices[i],
+                cmap='viridis',
+                cbar=(i == 0), # Only show the colourbar for the first plot
+                ax=ax
+            )
 
-        # Create the figure with subplots
-        fig, axes = plt.subplots(rows, cols, figsize=(25, 5 * rows))
-        axes = axes.flatten()
+            # Set the title for each subplot
+            ax.set_title(f'{(start_index + i * step + 1)} Connections', fontsize=12)
+            
+            # Customise the first plot with axis labels and colourbar
+            if i == 0:
+                num_labels = 4
+                ax.set_xticks(np.linspace(0, selected_matrices[i].shape[1] - 1, num_labels))
+                ax.set_yticks(np.linspace(0, selected_matrices[i].shape[0] - 1, num_labels))
+                ax.set_xticklabels(np.linspace(0, selected_matrices[i].shape[1] - 1, num_labels, dtype=int), fontsize=10)
+                ax.set_yticklabels(np.linspace(0, selected_matrices[i].shape[0] - 1, num_labels, dtype=int), fontsize=10)
+                colorbar = ax.collections[0].colorbar
+                colorbar.set_ticks([selected_matrices[i].min(), selected_matrices[i].max()])
+                colorbar.set_ticklabels([f'{selected_matrices[i].min():.2f}', f'{selected_matrices[i].max():.2f}'])
 
-        for i, ax in enumerate(axes):
-            if i < num_matrices:
-                sns.heatmap(
-                    selected_matrices[i],
-                    cmap='viridis',
-                    cbar=(i == 0), # Only show the colorbar for the first plot
-                    ax=ax
-                )
-                ax.set_title(f'Connection {(i * step) + 1}', fontsize=12)  # Adjust title to reflect the skipped indices
-                if i == 0:
-                    # Customize the first plot with axis labels and colorbar
-                    num_labels = 4
-                    ax.set_xticks(np.linspace(0, selected_matrices[i].shape[1] - 1, num_labels))
-                    ax.set_yticks(np.linspace(0, selected_matrices[i].shape[0] - 1, num_labels))
-                    ax.set_xticklabels(np.linspace(0, selected_matrices[i].shape[1] - 1, num_labels, dtype=int), fontsize=10)
-                    ax.set_yticklabels(np.linspace(0, selected_matrices[i].shape[0] - 1, num_labels, dtype=int), fontsize=10)
-                    colorbar = ax.collections[0].colorbar
-                    colorbar.set_ticks([selected_matrices[i].min(), selected_matrices[i].max()])
-                    colorbar.set_ticklabels([f'{selected_matrices[i].min():.2f}', f'{selected_matrices[i].max():.2f}'])
-                else:
-                    ax.set_xticks([])
-                    ax.set_yticks([])
             else:
-                ax.axis('off')
+                ax.set_xticks([])
+                ax.set_yticks([])
 
-        # Save the averaged matrices plot
-        fig.tight_layout(pad=3.0)
-        plt.savefig(f'{output_filepath}/version_{idx}_matrix_growth.png', dpi=300)
-        plt.close(fig)
+        else:
+            ax.axis('off')
 
-        # Analyse the final simulated timepoint
-        sim_adjm = matrix_series[-1]
+    # Save the averaged matrices plot
+    fig.tight_layout(pad=3.0)
+    plt.savefig(f'{output_filepath}/matrix_growth.png', dpi=300)
+    plt.close(fig)
 
-        # Compute graph metrics
-        degree = np.sum(sim_adjm != 0, axis=0)
-        total_edge_length = np.sum(sim_adjm, axis=0)
-        clustering = bct.clustering_coef_bu(sim_adjm)
-        betweenness = bct.betweenness_wei(1 / (sim_adjm + np.finfo(float).eps))
-        efficiency = bct.efficiency_wei(sim_adjm, local=True)
+    # Analyse the final simulated timepoint
+    sim_adjm = matrix_series[-1]
 
-        # Compute matching index
-        N = sim_adjm.shape[0]
-        matching_matrix = np.zeros((N, N))
-        for i in range(N):
-            for j in range(N):
-                if i != j:
-                    min_weights = np.minimum(sim_adjm[i, :], sim_adjm[j, :])
-                    max_weights = np.maximum(sim_adjm[i, :], sim_adjm[j, :])
-                    if np.sum(max_weights) > 0:  # Avoid division by zero
-                        matching_matrix[i, j] = np.sum(min_weights) / np.sum(max_weights)
+    # Compute graph metrics
+    degree = np.sum(sim_adjm != 0, axis=0)
+    total_edge_length = np.sum(sim_adjm, axis=0)
+    clustering = bct.clustering_coef_bu(sim_adjm)
+    betweenness = bct.betweenness_wei(1 / (sim_adjm + np.finfo(float).eps))
+    efficiency = bct.efficiency_wei(sim_adjm, local=True)
 
-        # Save adjacency matrix plot
-        plt.figure(figsize=(7, 6))
-        ax = sns.heatmap(sim_adjm, cmap='viridis', cbar=True)
-        ax.set_title('Thresholded Adjacency Matrix', fontsize=14)
-        num_labels = 10
-        ax.set_xticks(np.linspace(0, sim_adjm.shape[1] - 1, num_labels))
-        ax.set_yticks(np.linspace(0, sim_adjm.shape[0] - 1, num_labels))
-        ax.set_xticklabels(np.linspace(0, sim_adjm.shape[1] - 1, num_labels, dtype=int))
-        ax.set_yticklabels(np.linspace(0, sim_adjm.shape[0] - 1, num_labels, dtype=int))
-        plt.savefig(f'{output_filepath}/version_{idx}_adjacency_matrix.png', dpi=300)
-        plt.close()
+    # Compute matching index
+    N = sim_adjm.shape[0]
+    matching_matrix = np.zeros((N, N))
+    for i in range(N):
+        for j in range(N):
+            if i != j:
+                min_weights = np.minimum(sim_adjm[i, :], sim_adjm[j, :])
+                max_weights = np.maximum(sim_adjm[i, :], sim_adjm[j, :])
+                if np.sum(max_weights) > 0:  # Avoid division by zero
+                    matching_matrix[i, j] = np.sum(min_weights) / np.sum(max_weights)
 
-        # Plot graph metrics
-        fig, axes = plt.subplots(2, 2, figsize=(10, 8))
-        font_size = 16
-        tick_size = 14
-        line_color = '#1f77b4'
+    # Save adjacency matrix plot
+    plt.figure(figsize=(7, 6))
+    ax = sns.heatmap(sim_adjm, cmap='viridis', cbar=True)
+    ax.set_title('Thresholded Adjacency Matrix', fontsize=14)
+    num_labels = 10
+    ax.set_xticks(np.linspace(0, sim_adjm.shape[1] - 1, num_labels))
+    ax.set_yticks(np.linspace(0, sim_adjm.shape[0] - 1, num_labels))
+    ax.set_xticklabels(np.linspace(0, sim_adjm.shape[1] - 1, num_labels, dtype=int))
+    ax.set_yticklabels(np.linspace(0, sim_adjm.shape[0] - 1, num_labels, dtype=int))
+    plt.savefig(f'{output_filepath}/adjacency_matrix.png', dpi=300)
+    plt.close()
 
-        sns.kdeplot(degree, color=line_color, ax=axes[0, 0], linewidth=4, alpha=0.7)
-        axes[0, 0].set_xlabel('Degree', fontsize=font_size)
-        axes[0, 0].set_ylabel('Density', fontsize=font_size)
-        axes[0, 0].tick_params(axis='both', labelsize=tick_size)
+    # Plot graph metrics
+    fig, axes = plt.subplots(2, 2, figsize=(10, 8))
+    font_size = 16
+    tick_size = 14
+    line_color = '#1f77b4'
 
-        sns.kdeplot(total_edge_length, color=line_color, ax=axes[0, 1], linewidth=4, alpha=0.7)
-        axes[0, 1].set_xlabel('Total Edge Length', fontsize=font_size)
-        axes[0, 1].set_ylabel('Density', fontsize=font_size)
-        axes[0, 1].tick_params(axis='both', labelsize=tick_size)
+    sns.kdeplot(degree, color=line_color, ax=axes[0, 0], linewidth=4, alpha=0.7)
+    axes[0, 0].set_xlabel('Degree', fontsize=font_size)
+    axes[0, 0].set_ylabel('Density', fontsize=font_size)
+    axes[0, 0].tick_params(axis='both', labelsize=tick_size)
 
-        sns.kdeplot(clustering, color=line_color, ax=axes[1, 0], linewidth=4, alpha=0.7)
-        axes[1, 0].set_xlabel('Clustering Coefficient', fontsize=font_size)
-        axes[1, 0].set_ylabel('Density', fontsize=font_size)
-        axes[1, 0].tick_params(axis='both', labelsize=tick_size)
+    sns.kdeplot(total_edge_length, color=line_color, ax=axes[0, 1], linewidth=4, alpha=0.7)
+    axes[0, 1].set_xlabel('Total Edge Length', fontsize=font_size)
+    axes[0, 1].set_ylabel('Density', fontsize=font_size)
+    axes[0, 1].tick_params(axis='both', labelsize=tick_size)
 
-        sns.kdeplot(betweenness, color=line_color, ax=axes[1, 1], linewidth=4, alpha=0.7)
-        axes[1, 1].set_xlabel('Betweenness Centrality', fontsize=font_size)
-        axes[1, 1].set_ylabel('Density', fontsize=font_size)
-        axes[1, 1].tick_params(axis='both', labelsize=tick_size)
+    sns.kdeplot(clustering, color=line_color, ax=axes[1, 0], linewidth=4, alpha=0.7)
+    axes[1, 0].set_xlabel('Clustering Coefficient', fontsize=font_size)
+    axes[1, 0].set_ylabel('Density', fontsize=font_size)
+    axes[1, 0].tick_params(axis='both', labelsize=tick_size)
 
-        fig.tight_layout(pad=2.0, w_pad=3.0)
-        plt.savefig(f'{output_filepath}/version_{idx}_graph_metrics.png', dpi=300)
-        plt.close(fig)
+    sns.kdeplot(betweenness, color=line_color, ax=axes[1, 1], linewidth=4, alpha=0.7)
+    axes[1, 1].set_xlabel('Betweenness Centrality', fontsize=font_size)
+    axes[1, 1].set_ylabel('Density', fontsize=font_size)
+    axes[1, 1].tick_params(axis='both', labelsize=tick_size)
 
-        # Compute and save correlation heatmap
-        metrics_df = pd.DataFrame({
-            'degree': degree,
-            'clustering': clustering,
-            'betweenness': betweenness,
-            'total_edge_length': total_edge_length,
-            'efficiency': efficiency,
-            'matching_index': np.mean(matching_matrix, axis=1)
-        })
-        correlation_matrix = metrics_df.corr()
-        formatted_labels = ['Degree', 'Clustering', 'Betweenness', 'Total Edge Length', 'Efficiency', 'Matching Index']
+    fig.tight_layout(pad=2.0, w_pad=3.0)
+    plt.savefig(f'{output_filepath}/graph_metrics.png', dpi=300)
+    plt.close(fig)
 
-        plt.figure(figsize=(8, 6))
-        ax = sns.heatmap(correlation_matrix, cmap='RdBu_r', xticklabels=formatted_labels, yticklabels=formatted_labels, center=0, cbar=True)
-        ax.set_title('Topological Fingerprint Heatmap', fontsize=14)
-        ax.tick_params(axis='both', which='major', labelsize=10)
-        plt.savefig(f'{output_filepath}/version_{idx}_correlation_heatmap.png', dpi=300)
-        plt.close()
+    # Compute and save correlation heatmap
+    metrics_df = pd.DataFrame({
+        'degree': degree,
+        'clustering': clustering,
+        'betweenness': betweenness,
+        'total_edge_length': total_edge_length,
+        'efficiency': efficiency,
+        'matching_index': np.mean(matching_matrix, axis=1)
+    })
+    correlation_matrix = metrics_df.corr()
+    formatted_labels = ['Degree', 'Clustering', 'Betweenness', 'Total Edge Length', 'Efficiency', 'Matching Index']
+
+    plt.figure(figsize=(8, 6))
+    ax = sns.heatmap(correlation_matrix, cmap='RdBu_r', xticklabels=formatted_labels, yticklabels=formatted_labels, center=0, cbar=True)
+    ax.set_title('Topological Fingerprint Heatmap', fontsize=14)
+    ax.tick_params(axis='both', which='major', labelsize=10)
+    plt.savefig(f'{output_filepath}/correlation_heatmap.png', dpi=300)
+    plt.close()
 
 
 # %% Load and Process Data --------------------------------------------------
@@ -574,6 +598,7 @@ t0_t1_model = model(
     distance_matrix=modelling_data[0]['distance_matrix'],
     num_connections=modelling_data[0]['num_connections'],
     num_nodes=modelling_data[0]['num_nodes'],
+    real_network=modelling_data[0]['weighted_network'],
     seed_binary_network=None,
     seed_weighted_network=None,
     binary_network=modelling_data[0]['binary_network'],
@@ -664,6 +689,7 @@ t1_t2_model = model(
     distance_matrix=modelling_data[1]['distance_matrix'],
     num_connections=modelling_data[1]['num_connections'],
     num_nodes=modelling_data[1]['num_nodes'],
+    real_network=modelling_data[1]['weighted_network'],    
     seed_binary_network=simulated_t1_binary,
     seed_weighted_network=simulated_t1,
     binary_network=modelling_data[1]['binary_network'],
@@ -754,6 +780,7 @@ t2_t3_model = model(
     distance_matrix=modelling_data[2]['distance_matrix'],
     num_connections=modelling_data[2]['num_connections'],
     num_nodes=modelling_data[2]['num_nodes'],
+    real_network=modelling_data[2]['weighted_network'],
     seed_binary_network=simulated_t2_binary.unsqueeze(0)[:,:1,:,:],
     seed_weighted_network=simulated_t2.unsqueeze(0)[:,:1,:,:],
     binary_network=modelling_data[2]['binary_network'],
