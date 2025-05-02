@@ -120,7 +120,7 @@ def compute_metrics(file_name, species, day_number, adjM, density_levels, chimpa
 
         #  Compute NxN matrix where M[i, j] gives the matching index between nodes i and j
         start_time = time.time()
-        N = adjM.shape[0]
+        N = adjM_thresholded.shape[0]
         matching_matrix = np.zeros((N, N))
 
         for i in range(N):
@@ -412,7 +412,29 @@ if os.path.exists(pickle_dir):
     print(f'Loaded existing processed data with {len(processed_data)} entries.')
 
 # Load data
-matrix_files = load_files(matrix_dir=matrix_dir)
+#matrix_files = load_files(matrix_dir=matrix_dir)
+
+# Load simulated matrices ##########
+model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/'
+
+t0_t1_matrices = np.load(f'{model_filepath}/t0_t1/raw_model_outputs.npy', allow_pickle=True).item()
+simulated_t1 = t0_t1_matrices['weight_snapshots'][-1]
+simulated_t1 = torch.tensor(simulated_t1, dtype=torch.float)
+simulated_t1 = simulated_t1.unsqueeze(0)
+
+t1_t2_matrices = np.load(f'{model_filepath}/t1_t2/raw_model_outputs.npy', allow_pickle=True).item()
+simulated_t2 = t1_t2_matrices['weight_snapshots'][-1]
+simulated_t2 = torch.tensor(simulated_t2, dtype=torch.float)
+simulated_t2 = simulated_t2.unsqueeze(0)
+
+t2_t3_matrices = np.load(f'{model_filepath}/t2_t3/raw_model_outputs.npy', allow_pickle=True).item()
+simulated_t3 = t2_t3_matrices['weight_snapshots'][-1]
+simulated_t3 = torch.tensor(simulated_t3, dtype=torch.float)
+simulated_t3 = simulated_t3.unsqueeze(0)
+
+# Converge all simulated timepoints into matrix_files
+matrix_files = [simulated_t1, simulated_t2, simulated_t3]
+
 print(f'{len(matrix_files)} organoid file(s) loaded: {matrix_files}')
 
 # Sort one at a time
