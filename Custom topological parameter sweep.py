@@ -13,6 +13,8 @@ import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 
+print('Packages imported', flush=True)
+
 
 # %% Import Custom Functions --------------------------------------------------
 # Change directory to load in custom functions
@@ -24,6 +26,9 @@ from Functions.weighted_parameter_sweep import weighted_parameter_sweep
 from Functions.plot_energy_landscape import plot_energy_landscape
 from Functions.model import model
 from Functions.view_model import view_model
+from Functions.resize_seed_network import resize_seed_network
+
+print('Custom functions imported', flush=True)
 
 
 # %% Load and Process Data --------------------------------------------------
@@ -51,9 +56,9 @@ for slice in raw_slice_data:
         # Threshold top 5% strongest connections
         adjM_thresholded = bct.threshold_proportional(adjM, 0.05)
 
-        # Optional: Temporarily downsize for testing
-        adjM_thresholded = adjM_thresholded[40:140, 40:140]
-        dij = dij[40:140, 40:140]
+        # Subset
+        adjM_thresholded = adjM_thresholded
+        dij = dij
 
         # Create binary matrix
         binary_adjM = (adjM_thresholded > 0).astype(int)
@@ -89,17 +94,19 @@ for slice in raw_slice_data:
 
 # %% Set Parameterspace to Explore --------------------------------------------------
 # Define parameter ranges
-eta_values = torch.linspace(-10, 3, 4)
-gamma_values = torch.linspace(-2, 8, 4)
-alpha_values = torch.linspace(0, 1, 4)
+eta_values = torch.linspace(-7, 2, 20)
+gamma_values = torch.linspace(-2, 7, 20)
+alpha_values = torch.linspace(0, 1, 20)
 
 # Define number of simulations
-num_sweep = 2   # for parameter sweep
-num_model = 10  # for final model run
+num_sweep = 1   # for parameter sweep ########## increase when running full
+num_model = 5  # for final model run ########## increase when running full
+
+print('Parameters set', flush=True)
 
 
 # %% t0-t1 Parameter Sweep --------------------------------------------------
-t0_t1_sweep_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Parameter sweeps/t0_t1'
+t0_t1_sweep_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Parameter sweeps/t0_t1' 
 
 t0_t1_binary_results, t0_t1_optimal_binary_results = binary_parameter_sweep(
     eta_values=eta_values,
@@ -111,6 +118,8 @@ t0_t1_binary_results, t0_t1_optimal_binary_results = binary_parameter_sweep(
     output_filepath=t0_t1_sweep_filepath
 )
 
+print('t0 -> t1 binary parameter sweep complete', flush=True)
+
 t0_t1_weighted_results, t0_t1_optimal_weighted_results = weighted_parameter_sweep(
     optimal_binary_parameters=t0_t1_optimal_binary_results,
     alpha_values=alpha_values,
@@ -121,6 +130,8 @@ t0_t1_weighted_results, t0_t1_optimal_weighted_results = weighted_parameter_swee
     output_filepath=t0_t1_sweep_filepath
 )
 
+print('t0 -> t1 weighted parameter sweep complete', flush=True)
+
 plot_energy_landscape(
     binary_results=t0_t1_binary_results,
     weighted_results=t0_t1_weighted_results,
@@ -129,8 +140,11 @@ plot_energy_landscape(
     output_filepath=t0_t1_sweep_filepath
 )
 
+print('t0 -> t1 energy landscape plotted', flush=True)
+
 
 # %% t0-t1 Model --------------------------------------------------
+
 t0_t1_model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t0_t1'
 t0_t1_model = model(
     optimal_results=pd.read_csv(f'{t0_t1_sweep_filepath}/optimal_weighted_parameters.csv'),
@@ -144,10 +158,14 @@ t0_t1_model = model(
     output_filepath=t0_t1_model_filepath
 )
 
+print('t0 -> t1 model complete', flush=True)
+
 
 # %% t0-t1 View Model --------------------------------------------------
 t0_t1_data = np.load(f'{t0_t1_model_filepath}/raw_model_outputs.npy', allow_pickle=True).item()
-view_model(t0_t1_data['weight_snapshots'], output_filepath=t0_t1_model_filepath)
+"""view_model(t0_t1_data['weight_snapshots'], output_filepath=t0_t1_model_filepath)
+
+print('t0 -> t1 model viewed', flush=True)"""
 
 
 # %% t1-t2 Parameter Sweep --------------------------------------------------
@@ -157,6 +175,10 @@ t0_t1_last_tensor = torch.tensor(t0_t1_last, dtype=torch.float).unsqueeze(0)
 
 t0_t1_last_binary = t0_t1_data['adjacency_snapshots'][-1]
 t0_t1_last_binary_tensor = torch.tensor(t0_t1_last_binary, dtype=torch.float).unsqueeze(0)
+
+# Resize seed network to match target nodes of t1-t2
+t1_seed_weighted = resize_seed_network(t0_t1_last_tensor, modelling_data[1]['num_nodes'])
+t1_seed_binary = resize_seed_network(t0_t1_last_binary_tensor, modelling_data[1]['num_nodes'])
 
 # Set output directory
 t1_t2_sweep_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Parameter sweeps/t1_t2'
@@ -169,9 +191,11 @@ t1_t2_binary_results, t1_t2_optimal_binary_results = binary_parameter_sweep(
     distance_matrix=modelling_data[1]['distance_matrix'],
     num_connections=modelling_data[1]['num_connections'],
     binary_network=modelling_data[1]['binary_network'],
-    seed_binary_network=t0_t1_last_binary_tensor,
+    seed_binary_network=t1_seed_binary,
     output_filepath=t1_t2_sweep_filepath
 )
+
+print('t1 -> t2 binary parameter sweep complete', flush=True)
 
 # Weighted parameter sweep
 t1_t2_weighted_results, t1_t2_optimal_weighted_results = weighted_parameter_sweep(
@@ -181,10 +205,12 @@ t1_t2_weighted_results, t1_t2_optimal_weighted_results = weighted_parameter_swee
     distance_matrix=modelling_data[1]['distance_matrix'],
     num_connections=modelling_data[1]['num_connections'],
     weighted_network=modelling_data[1]['weighted_network'],
-    seed_binary_network=t0_t1_last_binary_tensor,
-    seed_weighted_network=t0_t1_last_tensor,
+    seed_binary_network=t1_seed_binary,
+    seed_weighted_network=t1_seed_weighted,
     output_filepath=t1_t2_sweep_filepath
 )
+
+print('t1 -> t2 weighted parameter sweep complete', flush=True)
 
 # Plot energy landscape
 plot_energy_landscape(
@@ -194,6 +220,8 @@ plot_energy_landscape(
     weighted_title='t1 → t2 Weighted Energy Landscape',
     output_filepath=t1_t2_sweep_filepath
 )
+
+print('t1 -> t2 energy landscape plotted', flush=True)
 
 
 # %% t1-t2 Model --------------------------------------------------
@@ -205,17 +233,21 @@ t1_t2_model = model(
     num_nodes=modelling_data[1]['num_nodes'],
     num_connections=modelling_data[1]['num_connections'],
     real_network=modelling_data[1]['weighted_network'],
-    seed_binary_network=t0_t1_last_binary_tensor,
-    seed_weighted_network=t0_t1_last_tensor,
+    seed_binary_network=t1_seed_binary,
+    seed_weighted_network=t1_seed_weighted,
     binary_network=modelling_data[1]['binary_network'],
     weighted_network=modelling_data[1]['weighted_network'],
     output_filepath=t1_t2_model_filepath
 )
 
+print('t1 -> t2 model complete', flush=True)
+
 
 # %% t1-t2 View Model --------------------------------------------------
 t1_t2_data = np.load(f'{t1_t2_model_filepath}/raw_model_outputs.npy', allow_pickle=True).item()
-view_model(t1_t2_data['weight_snapshots'], output_filepath=t1_t2_model_filepath)
+"""view_model(t1_t2_data['weight_snapshots'], output_filepath=t1_t2_model_filepath)
+
+print('t1 -> t2 model viewed', flush=True)"""
 
 
 # %% t2-t3 Parameter Sweep --------------------------------------------------
@@ -225,6 +257,10 @@ t1_t2_last_tensor = torch.tensor(t1_t2_last, dtype=torch.float).unsqueeze(0)
 
 t1_t2_last_binary = t1_t2_data['adjacency_snapshots'][-1]
 t1_t2_last_binary_tensor = torch.tensor(t1_t2_last_binary, dtype=torch.float).unsqueeze(0)
+
+# Resize seed network to match target nodes of t1-t2
+t2_seed_weighted = resize_seed_network(t1_t2_last_tensor, modelling_data[2]['num_nodes'])
+t2_seed_binary = resize_seed_network(t1_t2_last_binary_tensor, modelling_data[2]['num_nodes'])
 
 # Set output directory
 t2_t3_sweep_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Parameter sweeps/t2_t3'
@@ -237,9 +273,11 @@ t2_t3_binary_results, t2_t3_optimal_binary_results = binary_parameter_sweep(
     distance_matrix=modelling_data[2]['distance_matrix'],
     num_connections=modelling_data[2]['num_connections'],
     binary_network=modelling_data[2]['binary_network'],
-    seed_binary_network=t1_t2_last_binary_tensor,
+    seed_binary_network=t2_seed_binary,
     output_filepath=t2_t3_sweep_filepath
 )
+
+print('t2 -> t3 binary parameter sweep complete', flush=True)
 
 # Weighted parameter sweep
 t2_t3_weighted_results, t2_t3_optimal_weighted_results = weighted_parameter_sweep(
@@ -249,10 +287,12 @@ t2_t3_weighted_results, t2_t3_optimal_weighted_results = weighted_parameter_swee
     distance_matrix=modelling_data[2]['distance_matrix'],
     num_connections=modelling_data[2]['num_connections'],
     weighted_network=modelling_data[2]['weighted_network'],
-    seed_binary_network=t1_t2_last_binary_tensor,
-    seed_weighted_network=t1_t2_last_tensor,
+    seed_binary_network=t2_seed_binary,
+    seed_weighted_network=t2_seed_weighted,
     output_filepath=t2_t3_sweep_filepath
 )
+
+print('t2 -> t3 weighted parameter sweep complete', flush=True)
 
 # Plot energy landscape
 plot_energy_landscape(
@@ -262,6 +302,8 @@ plot_energy_landscape(
     weighted_title='t2 → t3 Weighted Energy Landscape',
     output_filepath=t2_t3_sweep_filepath
 )
+
+print('t2 -> t3 energy landscape plotted', flush=True)
 
 
 # %% t2-t3 Model --------------------------------------------------
@@ -273,17 +315,21 @@ t2_t3_model = model(
     num_nodes=modelling_data[2]['num_nodes'],
     num_connections=modelling_data[2]['num_connections'],
     real_network=modelling_data[2]['weighted_network'],
-    seed_binary_network=t1_t2_last_binary_tensor,
-    seed_weighted_network=t1_t2_last_tensor,
+    seed_binary_network=t2_seed_binary,
+    seed_weighted_network=t2_seed_weighted,
     binary_network=modelling_data[2]['binary_network'],
     weighted_network=modelling_data[2]['weighted_network'],
     output_filepath=t2_t3_model_filepath
 )
 
+print('t2 -> t3 model complete', flush=True)
+
 
 # %% t2-t3 View Model --------------------------------------------------
 t2_t3_data = np.load(f'{t2_t3_model_filepath}/raw_model_outputs.npy', allow_pickle=True).item()
-view_model(t2_t3_data['weight_snapshots'], output_filepath=t2_t3_model_filepath)
+"""view_model(t2_t3_data['weight_snapshots'], output_filepath=t2_t3_model_filepath)
+
+print('t2 -> t3 model viewed', flush=True)"""
 
 
 # %%

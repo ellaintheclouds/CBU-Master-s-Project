@@ -1,148 +1,131 @@
 # %% Import Packages and Functions --------------------------------------------------
 # Core libraries
-import os
 import numpy as np
-import pandas as pd
+import os
+import pickle
 
 # Plotting
 import matplotlib.pyplot as plt
-import seaborn as sns
 from matplotlib.ticker import MaxNLocator
+import umap
+import seaborn as sns
+
 
 # Graph theory metrics (Brain Connectivity Toolbox for Python)
+import bct
 from bct import clustering_coef_wu, betweenness_wei
 
 
-# %% Find optimal iteration of model --------------------------------------------------
-# Load all_runs.csv for each sweep
-base_dir = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Parameter sweeps'
-t0_t1_runs = pd.read_csv(f'{base_dir}/t0_t1/all_runs.csv')
-t1_t2_runs = pd.read_csv(f'{base_dir}/t1_t2/all_runs.csv')
-t2_t3_runs = pd.read_csv(f'{base_dir}/t2_t3/all_runs.csv')
-
-mean0 = pd.read_csv(f'{base_dir}/t0_t1/all_parameters.csv')
-mean1 = pd.read_csv(f'{base_dir}/t1_t2/all_parameters.csv')
-mean2 = pd.read_csv(f'{base_dir}/t2_t3/all_parameters.csv')
-
-# Merge mean energies for easy lookup
-merged_means = mean0.merge(mean1, on=['eta', 'gamma'], suffixes=('_0', '_1'))
-merged_means = merged_means.merge(mean2, on=['eta', 'gamma'])
-merged_means.rename(columns={'mean_energy': 'mean_energy_2'}, inplace=True)
-
-# Add deviation per simulation
-def get_deviation_df(df, mean_df, idx):
-    df = df.copy()
-    df = df.merge(mean_df, on=['eta', 'gamma'], suffixes=('', '_mean'))
-    df['abs_dev'] = abs(df['energy'] - df[f'mean_energy_{idx}'])
-    return df
-
-dev0 = get_deviation_df(t0_t1_runs, mean0, 0)
-dev1 = get_deviation_df(t1_t2_runs, mean1, 1)
-dev2 = get_deviation_df(t2_t3_runs, mean2, 2)
-
-# Sum absolute deviations across timepoints
-deviation_sum = dev0[['eta', 'gamma', 'sim_idx', 'abs_dev']].rename(columns={'abs_dev': 'dev_0'})
-deviation_sum['dev_1'] = dev1['abs_dev']
-deviation_sum['dev_2'] = dev2['abs_dev']
-deviation_sum['total_dev'] = deviation_sum[['dev_0', 'dev_1', 'dev_2']].sum(axis=1)
-
-# Find the row with the lowest total deviation
-best_sim = deviation_sum.loc[deviation_sum['total_dev'].idxmin()]
-best_eta, best_gamma, best_idx = best_sim['eta'], best_sim['gamma'], int(best_sim['sim_idx'])
-print(f"Most representative sim_idx: {best_idx} for eta={best_eta}, gamma={best_gamma}")
-
-# Load the selected simulation adjacency matrices
-def load_matrix_by_idx(path, sim_idx):
-    raw_data = np.load(f"{path}/raw_model_outputs.npy", allow_pickle=True).item()
-    return raw_data[sim_idx]['weight_snapshots']
+# %% Load Data ----------------------------------------------------------------------
+# Load the weighted snapshots
+t0_t1_model = np.load('/imaging/astle/er05/Organoid project scripts/Output_subset/Chimpanzee/Models/t0_t1/raw_model_outputs.npy', allow_pickle=True).item()['weight_snapshots']
+t1_t2_model = np.load('/imaging/astle/er05/Organoid project scripts/Output_subset/Chimpanzee/Models/t1_t2/raw_model_outputs.npy', allow_pickle=True).item()['weight_snapshots']
+t2_t3_model = np.load('/imaging/astle/er05/Organoid project scripts/Output_subset/Chimpanzee/Models/t2_t3/raw_model_outputs.npy', allow_pickle=True).item()['weight_snapshots']
 
 
 # %% Extract Metrics Across Snapshots --------------------------------------------------
-# Load the weighted snapshots
-t0_t1_model = load_matrix_by_idx('/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t0_t1', best_idx)
-t1_t2_model = load_matrix_by_idx('/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t1_t2', best_idx)
-t2_t3_model = load_matrix_by_idx('/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/t2_t3', best_idx)
+# Combine the three models
+all_snapshots = np.concatenate((t0_t1_model, t1_t2_model, t2_t3_model), axis=0)
 
-for snapshot in to_t1_model & t1_t2_model & t2_t3_model:
+metrics = []
+
+# Calculate metrics for each snapshot
+for idx, snapshot in enumerate(all_snapshots):
+    print(f"Processing snapshot {idx + 1}/{len(all_snapshots)}")
+
+    # Degree
     degree = np.sum(snapshot != 0, axis=0)
 
+    # Total edge length
     total_edge_length = np.sum(snapshot, axis=0)
 
+    # Clustering coefficient
     clustering = bct.clustering_coef_bu(snapshot)
 
+    # Betweenness centrality
     betweenness = bct.betweenness_wei(1 / (snapshot + np.finfo(float).eps))
 
+    # Efficiency
     efficiency = bct.efficiency_wei(snapshot, local=True)
 
-    start_time = time.time()
+    # Matching index
     N = snapshot.shape[0]
     matching_matrix = np.zeros((N, N))
 
     for i in range(N):
         for j in range(N):
             if i != j:
-                min_weights = np.minimum(adjM[i, :], adjM[j, :])
-                max_weights = np.maximum(adjM[i, :], adjM[j, :])
+                min_weights = np.minimum(snapshot[i, :], snapshot[j, :])
+                max_weights = np.maximum(snapshot[i, :], snapshot[j, :])
                 if np.sum(max_weights) > 0:  # Avoid division by zero
                     matching_matrix[i, j] = np.sum(min_weights) / np.sum(max_weights)
 
 
-# %% Plot Metric Distributions across three simulated timepoints -------------------------------------------------------------
-# Compute metrics
-metrics = []
-for idx, adj in enumerate([t0_t1_model, t1_t2_model, t2_t3_model]):
-    deg = np.sum((adj > 0).astype(int), axis=1)
-    clustering = clustering_coef_wu(adj)
-    betweenness = betweenness_wei(adj)
-    edge_lengths = []
-
-    #caluclate dij
-    dij = timepoint_slice_data[idx]['dij'][0:50, 0:50] ########## change when alaysing full network
-    for i in range(adj.shape[0]):
-        for j in range(i + 1, adj.shape[1]):
-            if adj[i, j] > 0:
-                edge_lengths.append(dij[i, j])
+    # Store metrics in a dictionary
     metrics.append({
-        'degree': deg,
+        'timepoint': idx + 1,  # Sequential timepoint index
+        'degree': degree,  # NumPy arrays can be stored directly in pickle
+        'total_edge_length': total_edge_length,
         'clustering': clustering,
         'betweenness': betweenness,
-        'total_edge_length': edge_lengths
+        'efficiency': efficiency,
+        'matching_matrix': matching_matrix
     })
 
-# Plot KDE panel
-fig, axes = plt.subplots(2, 2, figsize=(10, 8))
-font_size, tick_size = 18, 16
-graph_colours = {
-    'degree': ['#beb0e8', '#6d4dcb', '#301e67'],
-    'clustering': ['#b7cce1', '#93b3d2', '#4b80b4'],
-    'betweenness': ['#cae1e8', '#95c3d0', '#5fa6b9'],
-    'total_edge_length': ['#d7f4eb', '#afe9d8', '#73d9ba']
-}
-timepoints = [0, 1, 2]
+# Save metrics to a pickle file
+output_filepath = '/imaging/astle/er05/Organoid project scripts/Output_subset/Chimpanzeegraph_metrics.pkl'
+os.makedirs(os.path.dirname(output_filepath), exist_ok=True)
 
-for i, tp in enumerate(timepoints):
-    sns.kdeplot(metrics[tp]['degree'], color=graph_colours['degree'][i], ax=axes[0, 0], linewidth=3, alpha=0.7)
-    sns.kdeplot(metrics[tp]['clustering'], color=graph_colours['clustering'][i], ax=axes[0, 1], linewidth=3, alpha=0.7)
-    sns.kdeplot(metrics[tp]['betweenness'], color=graph_colours['betweenness'][i], ax=axes[1, 0], linewidth=3, alpha=0.7)
-    sns.kdeplot(metrics[tp]['total_edge_length'], color=graph_colours['total_edge_length'][i], ax=axes[1, 1], linewidth=3, alpha=0.7)
+with open(output_filepath, 'wb') as f:
+    pickle.dump(metrics, f)
 
-axes[0, 0].set_xlabel('Degree', fontsize=font_size)
-axes[0, 1].set_xlabel('Clustering Coefficient', fontsize=font_size)
-axes[1, 0].set_xlabel('Betweenness Centrality', fontsize=font_size)
-axes[1, 1].set_xlabel('Total Edge Length', fontsize=font_size)
+# %% Plot UMAP --------------------------------------------------
+# Load the metrics from the pickle file
+with open('/imaging/astle/er05/Organoid project scripts/Output_subset/Chimpanzeegraph_metrics.pkl', 'rb') as f:
+    metrics = pickle.load(f)
 
-for ax in axes.flatten():
-    ax.set_ylabel('Density', fontsize=font_size)
-    ax.tick_params(axis='both', labelsize=tick_size)
-    ax.xaxis.set_major_locator(MaxNLocator(4))
-    ax.yaxis.set_major_locator(MaxNLocator(4))
-    ax.spines['right'].set_visible(False)
-    ax.spines['top'].set_visible(False)
-    ax.spines['left'].set_color('lightgrey')
-    ax.spines['bottom'].set_color('lightgrey')
-    ax.spines['left'].set_linewidth(1)
-    ax.spines['bottom'].set_linewidth(1)
+# Create vectors of each metric for each snapshots
+feature_vectors = []
+timepoints = []
 
-fig.tight_layout(pad=3.0, w_pad=3.0, h_pad=3.0)
-plt.savefig('/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/energy_landscape_across_timepoints.png', bbox_inches='tight', dpi=300)
-plt.close()
+
+for snapshot in metrics:
+    # Flatten or summarise each metric
+    degree_mean = np.mean(snapshot['degree'])
+    clustering_mean = np.mean(snapshot['clustering'])
+    betweenness_mean = np.mean(snapshot['betweenness'])
+    efficiency_mean = np.mean(snapshot['efficiency'])
+    total_edge_length_sum = np.sum(snapshot['total_edge_length'])
+    matching_mean = np.mean(snapshot['matching_matrix'])
+
+    # Combine into one vector
+    features = [
+        degree_mean,
+        clustering_mean,
+        betweenness_mean,
+        efficiency_mean,
+        total_edge_length_sum,
+        matching_mean
+    ]
+
+    feature_vectors.append(features)
+    timepoints.append(snapshot['timepoint'])
+
+X = np.array(feature_vectors)  # Shape: (n_snapshots, n_features)
+
+# Run UMAP
+reducer = umap.UMAP(random_state=42)
+embedding = reducer.fit_transform(X)  # Shape: (n_snapshots, 2)
+
+# Plot
+plt.figure(figsize=(8, 6))
+scatter = plt.scatter(embedding[:, 0], embedding[:, 1], c=timepoints, cmap='viridis', s=50)
+plt.colorbar(scatter, label='Timepoint')
+plt.title('UMAP of Graph Metrics')
+plt.xlabel('UMAP 1')
+plt.ylabel('UMAP 2')
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+# %%
