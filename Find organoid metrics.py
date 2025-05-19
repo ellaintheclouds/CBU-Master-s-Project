@@ -1,4 +1,5 @@
 # %% Import packages --------------------------------------------------
+from datetime import datetime
 import os  # File operations
 import scipy.io  # Load MATLAB .mat files
 import matplotlib.pyplot as plt  # Plotting
@@ -14,13 +15,6 @@ import time  # Time operations
 
 
 # %% Define Functions --------------------------------------------------
-def load_files(matrix_dir):
-    """Load .mat files from a specified directory and filter based on a pattern."""
-    matrix_files = [file for file in glob('kr01/organoid/OrgNets/*.mat') 
-                if ('C' in os.path.basename(file) or 'H' in os.path.basename(file)) and 'dt10' in os.path.basename(file)]
-
-    return matrix_files
-
 def process_data(file_path):
     """Load and process a single .mat file."""
     file_name = os.path.basename(file_path).replace('.mat', '')
@@ -56,40 +50,86 @@ def process_data(file_path):
     # Remove channels with no corresponding coordinates from adjacency matrix
     difference = np.setdiff1d(np.unique(data_channel), coords_channel)
     indices = np.where(np.isin(np.unique(data_channel), difference))[0]
-    adjM = np.delete(adjM, indices, axis=0)
-    adjM = np.delete(adjM, indices, axis=1)
+    valid_indices = indices[indices < adjM.shape[0]] # Ensure indices are within bounds of adjM
+    adjM = np.delete(adjM, valid_indices, axis=0)
+    adjM = np.delete(adjM, valid_indices, axis=1)
     
     # Compute distance matrix
     dij = cdist(np.column_stack((x, y)), np.column_stack((x, y)))
     
     return file_name, adjM, dij
 
+from datetime import datetime  # Import datetime for date calculations
+
+from datetime import datetime  # Import datetime for date calculations
+
 def sort_data(file_name):
     """Sort data based on species and day number."""
     species = 'Chimpanzee' if 'C' in file_name else 'Human' if 'H' in file_name else None
-    day_number = next((f'Day {i}' for i in range(1, 365) if f'_d{i}_' in file_name), 'Unknown Day')
+
+    # Extract seeding and recording dates from the filename
+    try:
+        parts = file_name.split('_')
+        seeding_date_str = parts[2]  # Seeding date is the third part
+        recording_date_str = parts[3] # Recording date is the fourth part
+        seeding_date = datetime.strptime(seeding_date_str, '%Y%m%d')
+        recording_date = datetime.strptime(recording_date_str, '%Y%m%d')
+        day_number = f'Day {(recording_date - seeding_date).days}'
+    except (IndexError, ValueError):
+        day_number = 'Unknown Day'
 
     # Define the timepoint based on the day number
-    if day_number in ['Day 95', 'Day 96']:
-        timepoint = 't1'
-    elif day_number == 'Day 153':
-        timepoint = 't2'
-    elif day_number in ['Day 184', 'Day 185']:
-        timepoint = 't3'
+    if species == 'Chimpanzee':
+        if day_number in ['Day 95', 'Day 96']:
+            timepoint = 't1'
+        elif day_number == 'Day 153':
+            timepoint = 't2'
+        elif day_number in ['Day 184', 'Day 185']:
+            timepoint = 't3'
+        else:
+            timepoint = 'Unknown Timepoint'
+    elif species == 'Human':
+        try:
+            day_number_int = int(day_number.split()[1])  # Extract the numeric day value
+            if 90 <= day_number_int <= 134:
+                timepoint = 't1'
+            elif 135 <= day_number_int <= 164:
+                timepoint = 't2'
+            elif 165 <= day_number_int <= 185:
+                timepoint = 't3'
+            else:
+                timepoint = 'Unknown Timepoint'
+        except (IndexError, ValueError):
+            timepoint = 'Unknown Timepoint'
     else:
         timepoint = 'Unknown Timepoint'
-    return species, day_number, timepoint
 
-    # Store sorted information for later processing
-    processed_data.append((file_name, species, day_number, timepoint))
+    # Define the cell line if human
+    if species == 'Human':
+        if 'fiaj' in file_name:
+            cell_line = 'fiaj'
+        elif 'hehd1' in file_name:
+            cell_line = 'hehd1'
+        elif 'scti003a' in file_name.lower(): # Added .lower() for case-insensitivity
+            cell_line = 'SCTi003A'
+        elif 'pahc4' in file_name.lower():   # Added .lower() for case-insensitivity
+            cell_line = 'Pahc4'
+        elif 'bioni' in file_name.lower():   # Added .lower() for case-insensitivity
+            cell_line = 'bioni'
+        else:
+            cell_line = 'Unknown Cell Line'
+    else:
+        cell_line = None
 
-    print('All matrices sorted.')
-
+    return species, day_number, timepoint, cell_line
+    
 def compute_metrics(file_name, species, day_number, adjM, density_levels, chimpanzee_metrics_df, human_metrics_df):
     """Compute graph theory metrics at different thresholds."""
     metrics_list = []
     
     for density_level in density_levels:
+        print(f'  Processing {density_level * 100:.0f}% density level:')
+
         adjM_thresholded = bct.threshold_proportional(adjM, density_level)
         
         # Compute graph metrics
@@ -184,7 +224,9 @@ def compute_metrics(file_name, species, day_number, adjM, density_levels, chimpa
 
 def save_data(output_dir, pickle_dir, processed_data, chimpanzee_metrics_df, human_metrics_df):
     """Save data incrementally to a pickle file."""
-    
+    # Ensure output directories exist
+    os.makedirs(f'{output_dir}/Chimpanzee', exist_ok=True)
+    os.makedirs(f'{output_dir}/Human', exist_ok=True)
     chimpanzee_metrics_df.to_csv(f'{output_dir}/Chimpanzee/chimpanzee_metrics_summary.csv', index=False)
     human_metrics_df.to_csv(f'{output_dir}/Human/human_metrics_summary.csv', index=False)
 
@@ -202,6 +244,7 @@ def individual_plot(processed_data_idx, output_dir):
     matrix_name = processed_data_idx['file_name']
     species = processed_data_idx['species']
     timepoint = processed_data_idx['timepoint']
+    cell_line = processed_data_idx['cell_line']
     dij = processed_data_idx['dij']
 
     for density_data in processed_data_idx['metrics']:
@@ -214,8 +257,12 @@ def individual_plot(processed_data_idx, output_dir):
         efficiency = density_data['efficiency']
         matching_matrix = density_data['matching_index']
 
-        # Create output directory
-        plot_dir = os.path.join(output_dir, species, timepoint, f'{int(density_level * 100)}%')
+        # Create output directory with cell_line and timepoint
+        if cell_line is not None:
+            plot_dir = os.path.join(output_dir, species, cell_line, timepoint, f'{int(density_level * 100)}%')
+        else:
+            plot_dir = os.path.join(output_dir, species, timepoint, f'{int(density_level * 100)}%')
+
         os.makedirs(plot_dir, exist_ok=True)
         
         # Adjacency matrix heatmap
@@ -275,13 +322,18 @@ def individual_plot(processed_data_idx, output_dir):
         plt.close()
 
 def overlaid_metrics_plot(processed_data_idx, output_dir):
-    """Generate and save plots overlaid with information for multiple densities"""
+    """Generate and save plots overlaid with information for multiple densities."""
     matrix_name = processed_data_idx['file_name']
     species = processed_data_idx['species']
     timepoint = processed_data_idx['timepoint']
+    cell_line = processed_data_idx['cell_line']
 
-    # Create output directory
-    plot_dir = os.path.join(output_dir, species, timepoint)
+    # Create output directory with cell_line and timepoint
+    if cell_line is not None:
+        plot_dir = os.path.join(output_dir, species, cell_line, timepoint)
+    else:
+        plot_dir = os.path.join(output_dir, species, timepoint)
+
     os.makedirs(plot_dir, exist_ok=True)
 
     # Graph metrics visualisations ----------
@@ -345,34 +397,37 @@ def overlaid_metrics_plot(processed_data_idx, output_dir):
     plt.savefig(f'{plot_dir}/{matrix_name}_Graph_Metrics.png', dpi=300, bbox_inches='tight')
     plt.close()
 
-def fingerprint_correlation_plot(processed_data_idx, output_dir): # read in metrics dataframes
+def fingerprint_correlation_plot(processed_data_idx, output_dir, chosen_slices): # read in metrics dataframes
     """Generate and save plots comparing correlation of topological fingerprint over densities."""
+    
     # Load chimpanzee metrics dataframe
-    chimpanzee_metrics_df = pd.read_csv(f'{output_dir}/Chimpanzee/chimpanzee_metrics_summary.csv')
+    if processed_data_idx['species'] == 'Chimpanzee':
+        metrics_df = pd.read_csv(f'{output_dir}/Chimpanzee/chimpanzee_metrics_summary.csv')
+    elif processed_data_idx['species'] == 'Human':
+        metrics_df = pd.read_csv(f'{output_dir}/Human/human_metrics_summary.csv')
+    else:
+        raise ValueError('Species not recognised.')
 
-    # Create output directory
+    # Create output directory if it doesn't exist
     plot_dir = os.path.join(output_dir, species)
     os.makedirs(plot_dir, exist_ok=True)
 
     # 'Topological fingerprint' correlation across densities ----------
-    # In chosen slices, for each density level, compute average means across slices
-    chosen_slices = ['C_d96_s2_dt10', 'C_d153_s7_dt10', 'C_d184_s8_dt10']
-
-    chimpanzee_metrics_df_subset = chimpanzee_metrics_df[
+    metrics_df_subset = chimpanzee_metrics_df[
         (chimpanzee_metrics_df['file_name'].isin(chosen_slices))
     ]
 
     # Group by 'density_level' and compute the mean for numeric columns only
-    chimpanzee_metrics_df_subset = chimpanzee_metrics_df_subset.groupby(['density_level']).mean(numeric_only=True).reset_index()
+    metrics_df_subset = metrics_df_subset.groupby(['density_level']).mean(numeric_only=True).reset_index()
 
 
     # Select only the metrics of interest
-    chimpanzee_metrics_df_subset = chimpanzee_metrics_df_subset[
+    metrics_df_subset = metrics_df_subset[
         ['degree_mean', 'clustering_mean', 'betweenness_mean', 'total_edge_length_mean', 'efficiency_mean', 'matching_mean']
     ]
 
     # Compute correlation matrix
-    CS_correlation_matrix = chimpanzee_metrics_df_subset.corr()
+    CS_correlation_matrix = metrics_df_subset.corr()
 
     # Define better-formatted labels
     formatted_labels = [
@@ -392,8 +447,7 @@ def fingerprint_correlation_plot(processed_data_idx, output_dir): # read in metr
 # Define working directory
 os.chdir('/imaging/astle')
 
-# Set output directories
-matrix_dir = 'kr01/organoid/OrgNets'
+# Set output directory
 output_dir = 'er05/Organoid project scripts/Output'
 os.makedirs(output_dir, exist_ok=True)
 
@@ -403,7 +457,11 @@ human_metrics_df = pd.DataFrame()
 processed_data = []
 
 # Define density levels
-density_levels = [0.05, 0.1, 0.2, 1]
+density_levels = [0.05, 0.1, 0.2] ##########
+
+# Define chosen slices for fingerprint correlation plot
+#chosen_slices=['C_d96_s2_dt10', 'C_d153_s7_dt10', 'C_d184_s8_dt10'] ########## change this to be realted to the species/cell line that I am studying
+chosen_slices=None
 
 # Load existing processed data if available
 pickle_dir = f'{output_dir}/processed_data.pkl'
@@ -411,29 +469,19 @@ if os.path.exists(pickle_dir):
     processed_data = load_data(pickle_dir=pickle_dir)
     print(f'Loaded existing processed data with {len(processed_data)} entries.')
 
-# Load data
-#matrix_files = load_files(matrix_dir=matrix_dir)
+# Load data ########## change depending on whether I want to look at chimp or human data
+#matrix_files = [file for file in glob('kr01/organoid/OrgNets/*.mat') 
+#            if ('C' in os.path.basename(file) or 'H' in os.path.basename(file)) and 'dt10' in os.path.basename(file)]
 
-# Load simulated matrices ##########
-model_filepath = '/imaging/astle/er05/Organoid project scripts/Output/Chimpanzee/Models/'
+matrix_files = [file for file in glob('er05/H5 Analysis/Organoid Data/*.mat')]
 
-t0_t1_matrices = np.load(f'{model_filepath}/t0_t1/raw_model_outputs.npy', allow_pickle=True).item()
-simulated_t1 = t0_t1_matrices['weight_snapshots'][-1]
-simulated_t1 = torch.tensor(simulated_t1, dtype=torch.float)
-simulated_t1 = simulated_t1.unsqueeze(0)
-
-t1_t2_matrices = np.load(f'{model_filepath}/t1_t2/raw_model_outputs.npy', allow_pickle=True).item()
-simulated_t2 = t1_t2_matrices['weight_snapshots'][-1]
-simulated_t2 = torch.tensor(simulated_t2, dtype=torch.float)
-simulated_t2 = simulated_t2.unsqueeze(0)
-
-t2_t3_matrices = np.load(f'{model_filepath}/t2_t3/raw_model_outputs.npy', allow_pickle=True).item()
-simulated_t3 = t2_t3_matrices['weight_snapshots'][-1]
-simulated_t3 = torch.tensor(simulated_t3, dtype=torch.float)
-simulated_t3 = simulated_t3.unsqueeze(0)
-
-# Converge all simulated timepoints into matrix_files
-matrix_files = [simulated_t1, simulated_t2, simulated_t3]
+#matrix_files = []
+#for root, _, files in os.walk('er05/H5 Analysis/Organoid Data'): # Traverse all subdirectories
+#    for file in files:
+#        if file.endswith('.mat') and ('C' in file or 'H' in file) and 'dt10' in file:
+#
+#
+#            matrix_files.append(os.path.join(root, file))  # Add full path to the list
 
 print(f'{len(matrix_files)} organoid file(s) loaded: {matrix_files}')
 
@@ -443,7 +491,7 @@ for idx, file_path in enumerate(matrix_files):
     file_name, adjM, dij = process_data(file_path=file_path)
 
     # Sort data
-    species, day_number, timepoint = sort_data(file_name)
+    species, day_number, timepoint, cell_line = sort_data(file_name)
 
     print(f'Processing {file_name} ({idx + 1}/{len(matrix_files)}):')
 
@@ -471,6 +519,7 @@ for idx, file_path in enumerate(matrix_files):
             'file_name': file_name,
             'species': species,
             'timepoint': timepoint,
+            'cell_line': cell_line,
             'adjM': adjM,
             'dij': dij,
             'metrics': metrics_list
@@ -483,11 +532,13 @@ for idx, file_path in enumerate(matrix_files):
 
     # Plot
     processed_data_idx = next(entry for entry in processed_data if entry['file_name'] == file_name)
-    #individual_plot(processed_data_idx=processed_data_idx, output_dir=output_dir)
+    individual_plot(processed_data_idx=processed_data_idx, output_dir=output_dir)
     overlaid_metrics_plot(processed_data_idx=processed_data_idx, output_dir=output_dir)
-    #fingerprint_correlation_plot(processed_data_idx=processed_data_idx, output_dir=output_dir)
+    if chosen_slices is not None:
+        fingerprint_correlation_plot(processed_data_idx=processed_data_idx, output_dir=output_dir, chosen_slices=chosen_slices)
     print('- Plots created')
 
 print('Processing complete. Metrics saved incrementally.')
+
 
 # %%

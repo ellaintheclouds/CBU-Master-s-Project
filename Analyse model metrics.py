@@ -2,14 +2,17 @@
 # Core libraries
 import numpy as np
 import os
+import pandas as pd
 import pickle
 
 # Plotting
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
+from mpl_toolkits.mplot3d import Axes3D  # Import 3D plotting tools
+import plotly.express as px
 import umap
 import seaborn as sns
-
+from sklearn.preprocessing import StandardScaler
 
 # Graph theory metrics (Brain Connectivity Toolbox for Python)
 import bct
@@ -79,53 +82,91 @@ os.makedirs(os.path.dirname(output_filepath), exist_ok=True)
 with open(output_filepath, 'wb') as f:
     pickle.dump(metrics, f)
 
-# %% Plot UMAP --------------------------------------------------
+# %% Process Data For Plotting --------------------------------------------------
 # Load the metrics from the pickle file
 with open('/imaging/astle/er05/Organoid project scripts/Output_subset/Chimpanzeegraph_metrics.pkl', 'rb') as f:
     metrics = pickle.load(f)
 
-# Create vectors of each metric for each snapshots
+# Extract features and timepoints
 feature_vectors = []
 timepoints = []
 
-
 for snapshot in metrics:
-    # Flatten or summarise each metric
-    degree_mean = np.mean(snapshot['degree'])
-    clustering_mean = np.mean(snapshot['clustering'])
-    betweenness_mean = np.mean(snapshot['betweenness'])
-    efficiency_mean = np.mean(snapshot['efficiency'])
-    total_edge_length_sum = np.sum(snapshot['total_edge_length'])
-    matching_mean = np.mean(snapshot['matching_matrix'])
-
-    # Combine into one vector
     features = [
-        degree_mean,
-        clustering_mean,
-        betweenness_mean,
-        efficiency_mean,
-        total_edge_length_sum,
-        matching_mean
+        np.mean(snapshot['degree']),
+        np.mean(snapshot['clustering']),
+        np.mean(snapshot['betweenness']),
+        np.mean(snapshot['efficiency']),
+        np.sum(snapshot['total_edge_length']),
+        np.mean(snapshot['matching_matrix'])
     ]
-
     feature_vectors.append(features)
     timepoints.append(snapshot['timepoint'])
 
-X = np.array(feature_vectors)  # Shape: (n_snapshots, n_features)
+X = np.array(feature_vectors)
+timepoints = np.array(timepoints).reshape(-1, 1)  # reshape for scaler
 
-# Run UMAP
-reducer = umap.UMAP(random_state=42)
-embedding = reducer.fit_transform(X)  # Shape: (n_snapshots, 2)
 
-# Plot
-plt.figure(figsize=(8, 6))
-scatter = plt.scatter(embedding[:, 0], embedding[:, 1], c=timepoints, cmap='viridis', s=50)
-plt.colorbar(scatter, label='Timepoint')
-plt.title('UMAP of Graph Metrics')
-plt.xlabel('UMAP 1')
-plt.ylabel('UMAP 2')
-plt.grid(True)
+# %% Normalise Features & Time ---------------------------------
+# Normalise the feature vectors
+scaler = StandardScaler()
+X_normalized = scaler.fit_transform(X)
+
+X_with_time = np.hstack([X_normalized, np.array(timepoints).reshape(-1, 1)])
+
+
+# %% Run UMAP --------------------------------------------------
+# Run UMAP on the combined feature set
+reducer = umap.UMAP(n_components=3, n_neighbors=50, min_dist=0.1, random_state=42)
+embedding = reducer.fit_transform(X_with_time)
+
+# Store UMAP embedding in a DataFrame
+embedding_df = pd.DataFrame(embedding, columns=['UMAP1', 'UMAP2', 'UMAP3'])
+embedding_df['Timepoint'] = timepoints.flatten()
+
+# %% Plot UMAP --------------------------------------------------
+# Shared Settings
+color_vals = timepoints.flatten()
+marker_size = 4
+cmap = 'viridis'
+
+# Static 3D Plot (Matplotlib)
+fig = plt.figure(figsize=(8, 6))
+ax = fig.add_subplot(111, projection='3d')
+scatter = ax.scatter(
+    embedding[:, 0], embedding[:, 1], embedding[:, 2],
+    c=color_vals, cmap=cmap, s=marker_size
+)
+fig.colorbar(scatter, label='Timepoint')
+ax.set_title('3D UMAP of Graph Metrics')
+ax.set_xlabel('UMAP 1')
+ax.set_ylabel('UMAP 2')
+ax.set_zlabel('UMAP 3')
+ax.view_init(elev=20, azim=45)  # Consistent camera angle
+ax.set_box_aspect([1, 1, 1])    # Equal aspect ratio
 plt.tight_layout()
 plt.show()
+
+# Interactive 3D Plot (Plotly)
+fig = px.scatter_3d(
+    embedding_df, x='UMAP1', y='UMAP2', z='UMAP3',
+    color='Timepoint', color_continuous_scale=cmap,
+    title='3D UMAP of Graph Metrics',
+)
+
+# Match view and layout to matplotlib
+fig.update_traces(marker=dict(size=marker_size))
+fig.update_layout(
+    scene=dict(
+        xaxis_title='UMAP 1',
+        yaxis_title='UMAP 2',
+        zaxis_title='UMAP 3',
+        aspectmode='cube',
+        camera=dict(eye=dict(x=1.5, y=1.5, z=0.8))  # Match static view
+    ),
+    margin=dict(l=0, r=0, b=0, t=30)
+)
+fig.show()
+
 
 # %%

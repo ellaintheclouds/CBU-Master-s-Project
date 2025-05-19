@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH --job-name=subset_elle_job_trial
+#SBATCH --job-name=s_elle_org_metrics
 
 module load conda
 conda activate ella_organoid
 
 cd "/imaging/astle/er05/Organoid project scripts"
-python "Custom topological parameter sweep.py"
+python "Organoid metrics.py"
